@@ -1,6 +1,4 @@
 module github.com/LCGant/role-gateway/tools/smoke
 
-go 1.24
-toolchain go1.24.11
-
-
+go 1.26.0
+toolchain go1.26.1
