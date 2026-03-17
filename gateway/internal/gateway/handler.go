@@ -61,13 +61,17 @@ func NewHandler(cfg config.Config, logger *slog.Logger) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
+	socialURL, err := url.Parse(cfg.SocialUpstream)
+	if err != nil {
+		return nil, err
+	}
 
 	transport, err := buildTransport(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	var authBreaker, pdpBreaker *circuit.Breaker
+	var authBreaker, pdpBreaker, socialBreaker *circuit.Breaker
 	if cfg.BreakerEnabled {
 		authBreaker = circuit.New(circuit.Options{
 			FailureThreshold: cfg.BreakerFailures,
@@ -79,14 +83,20 @@ func NewHandler(cfg config.Config, logger *slog.Logger) (*Handler, error) {
 			ResetTimeout:     cfg.BreakerReset,
 			HalfOpenMax:      cfg.BreakerHalfOpen,
 		})
+		socialBreaker = circuit.New(circuit.Options{
+			FailureThreshold: cfg.BreakerFailures,
+			ResetTimeout:     cfg.BreakerReset,
+			HalfOpenMax:      cfg.BreakerHalfOpen,
+		})
 	}
 
 	authProxy := newProxy("auth", "/auth", authURL, transport, logger, authBreaker)
 	pdpProxy := newProxy("pdp", "/pdp", pdpURL, transport, logger, pdpBreaker)
+	socialProxy := newProxy("social", "/social", socialURL, transport, logger, socialBreaker)
 
 	h := &Handler{
 		logger:         logger,
-		routes:         map[string]*route{"/auth": authProxy, "/pdp": pdpProxy},
+		routes:         map[string]*route{"/auth": authProxy, "/pdp": pdpProxy, "/social": socialProxy},
 		limiter:        limiter.New(cfg.RateLimitRPS, cfg.RateLimitBurst, limiter.WithMaxEntries(cfg.RateLimitMaxKeys)),
 		loginLimiter:   limiter.New(cfg.LoginRateLimitRPS, cfg.LoginRateLimitBurst, limiter.WithMaxEntries(cfg.RateLimitMaxKeys)),
 		maxBodyBytes:   cfg.MaxBodyBytes,
@@ -170,6 +180,8 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) string {
 		return h.handleAuth(w, r, h.routes["/auth"])
 	case path == "/pdp" || strings.HasPrefix(path, "/pdp/"):
 		return h.handlePDP(w, r, h.routes["/pdp"])
+	case path == "/social" || strings.HasPrefix(path, "/social/"):
+		return h.handleSocial(w, r, h.routes["/social"])
 	case path == "/notification" || strings.HasPrefix(path, "/notification/"):
 		httpx.WriteForbidden(w)
 		return "notification"
@@ -270,6 +282,19 @@ func (h *Handler) handlePDP(w http.ResponseWriter, r *http.Request, rt *route) s
 		return rt.name
 	}
 
+	return h.handleProxy(w, r, rt)
+}
+
+func (h *Handler) handleSocial(w http.ResponseWriter, r *http.Request, rt *route) string {
+	if rt == nil {
+		httpx.WriteBadGateway(w)
+		return "missing"
+	}
+	stripped := httpx.StripPrefix(r.URL.Path, rt.prefix)
+	if isSocialInternalPath(stripped) {
+		httpx.WriteForbidden(w)
+		return rt.name
+	}
 	return h.handleProxy(w, r, rt)
 }
 
@@ -449,6 +474,10 @@ func isPDPDecisionPath(path string) bool {
 }
 
 func isAuthInternalPath(path string) bool {
+	return path == "/internal" || strings.HasPrefix(path, "/internal/")
+}
+
+func isSocialInternalPath(path string) bool {
 	return path == "/internal" || strings.HasPrefix(path, "/internal/")
 }
 

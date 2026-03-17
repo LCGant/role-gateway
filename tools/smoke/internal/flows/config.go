@@ -12,8 +12,10 @@ type Config struct {
 	BaseURL                    string
 	AuthBaseURL                string
 	PDPBaseURL                 string
+	SocialBaseURL              string
 	AuthInternalToken          string
 	AuthEmailVerificationToken string
+	SocialInternalToken        string
 	NotificationOutboxDir      string
 	PDPInternalToken           string
 	AdminToken                 string
@@ -27,6 +29,7 @@ func LoadConfig() Config {
 	base := getenv("SMOKE_BASE_URL", "http://gateway:8080")
 	authBase := getenv("SMOKE_AUTH_BASE_URL", "http://auth:8080")
 	pdpBase := getenv("SMOKE_PDP_BASE_URL", "http://pdp:8080")
+	socialBase := getenv("SMOKE_SOCIAL_BASE_URL", "http://social:8080")
 	timeout := parseDuration(getenv("SMOKE_TIMEOUT", "60s"), 60*time.Second)
 	verbose := parseBool(getenv("SMOKE_VERBOSE", "false"))
 	sessionCookie := getenv("SMOKE_SESSION_COOKIE", "session_id")
@@ -41,8 +44,10 @@ func LoadConfig() Config {
 		BaseURL:                    strings.TrimRight(base, "/"),
 		AuthBaseURL:                strings.TrimRight(authBase, "/"),
 		PDPBaseURL:                 strings.TrimRight(pdpBase, "/"),
+		SocialBaseURL:              strings.TrimRight(socialBase, "/"),
 		AuthInternalToken:          authInternalToken,
 		AuthEmailVerificationToken: authEmailVerificationToken,
+		SocialInternalToken:        os.Getenv("SMOKE_SOCIAL_INTERNAL_TOKEN"),
 		NotificationOutboxDir:      strings.TrimSpace(os.Getenv("SMOKE_NOTIFICATION_OUTBOX_DIR")),
 		PDPInternalToken:           os.Getenv("SMOKE_PDP_INTERNAL_TOKEN"),
 		AdminToken:                 os.Getenv("SMOKE_ADMIN_TOKEN"),

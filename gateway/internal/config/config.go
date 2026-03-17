@@ -13,6 +13,7 @@ type Config struct {
 	HTTPAddr               string
 	AuthUpstream           string
 	PDPUpstream            string
+	SocialUpstream         string
 	ReadHeaderTimeout      time.Duration
 	ReadTimeout            time.Duration
 	WriteTimeout           time.Duration
@@ -54,6 +55,10 @@ func Load() (Config, error) {
 		},
 		func() (err error) {
 			cfg.PDPUpstream, err = configx.URLString("PDP_UPSTREAM", cfg.PDPUpstream)
+			return err
+		},
+		func() (err error) {
+			cfg.SocialUpstream, err = configx.URLString("SOCIAL_UPSTREAM", cfg.SocialUpstream)
 			return err
 		},
 		func() (err error) {
@@ -193,12 +198,18 @@ func (c Config) Validate() error {
 	if err := configx.RequireNonEmpty("PDP_UPSTREAM", c.PDPUpstream); err != nil {
 		return err
 	}
+	if err := configx.RequireNonEmpty("SOCIAL_UPSTREAM", c.SocialUpstream); err != nil {
+		return err
+	}
 	if !c.AllowInsecureUpstreams {
 		if isInsecureHTTPURL(c.AuthUpstream) {
 			return errors.New("AUTH_UPSTREAM must use https when GATEWAY_ALLOW_INSECURE_UPSTREAMS=false")
 		}
 		if isInsecureHTTPURL(c.PDPUpstream) {
 			return errors.New("PDP_UPSTREAM must use https when GATEWAY_ALLOW_INSECURE_UPSTREAMS=false")
+		}
+		if isInsecureHTTPURL(c.SocialUpstream) {
+			return errors.New("SOCIAL_UPSTREAM must use https when GATEWAY_ALLOW_INSECURE_UPSTREAMS=false")
 		}
 	}
 	if err := configx.RequirePositive("GATEWAY_MAX_BODY_BYTES", c.MaxBodyBytes); err != nil {
@@ -252,6 +263,7 @@ func defaults() Config {
 		HTTPAddr:               ":8080",
 		AuthUpstream:           "http://auth:8080",
 		PDPUpstream:            "http://pdp:8080",
+		SocialUpstream:         "http://social:8080",
 		ReadHeaderTimeout:      5 * time.Second,
 		ReadTimeout:            15 * time.Second,
 		WriteTimeout:           15 * time.Second,

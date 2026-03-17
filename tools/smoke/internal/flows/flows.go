@@ -43,6 +43,10 @@ func PDPDecisionScenario() Scenario {
 	return Scenario{Name: "pdp_decision", Run: runPDPDecision}
 }
 
+func SocialProfileScenario() Scenario {
+	return Scenario{Name: "social_profile", Run: runSocialProfile}
+}
+
 func BodyLimitScenario() Scenario {
 	return Scenario{Name: "payload_limit", Run: runBodyLimit}
 }
@@ -71,6 +75,10 @@ func newPDPInternalClient(cfg Config) (*client.Client, error) {
 	return client.New(cfg.PDPBaseURL, 10*time.Second)
 }
 
+func newSocialInternalClient(cfg Config) (*client.Client, error) {
+	return client.New(cfg.SocialBaseURL, 10*time.Second)
+}
+
 func wait(ctx context.Context, dur time.Duration) error {
 	t := time.NewTimer(dur)
 	select {
@@ -88,7 +96,7 @@ func runHealth(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	endpoints := []string{"/healthz", "/auth/healthz", "/pdp/healthz"}
+	endpoints := []string{"/healthz", "/auth/healthz", "/pdp/healthz", "/social/healthz"}
 	for _, ep := range endpoints {
 		code, body, _, err := c.Get(ctx, ep, nil)
 		if err != nil {
@@ -403,6 +411,155 @@ func runPDPDecision(ctx context.Context, cfg Config, logger *slog.Logger) error 
 	return nil
 }
 
+func runSocialProfile(ctx context.Context, cfg Config, logger *slog.Logger) error {
+	if cfg.SocialInternalToken == "" {
+		return errors.New("SMOKE_SOCIAL_INTERNAL_TOKEN not set")
+	}
+
+	ownerClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	viewerClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	anonClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	socialInternal, err := newSocialInternalClient(cfg)
+	if err != nil {
+		return err
+	}
+
+	owner, err := registerAndLogin(ctx, ownerClient, cfg)
+	if err != nil {
+		return err
+	}
+	viewer, err := registerAndLogin(ctx, viewerClient, cfg)
+	if err != nil {
+		return err
+	}
+
+	if err := patchJSON(ctx, ownerClient, "/social/profiles/me", map[string]any{
+		"username":       owner.username,
+		"display_name":   "Owner Profile",
+		"bio":            "best places in town",
+		"visibility":     "public",
+		"allow_follow":   true,
+		"allow_messages": true,
+		"discoverable":   true,
+	}); err != nil {
+		return err
+	}
+	if err := patchJSON(ctx, viewerClient, "/social/profiles/me", map[string]any{
+		"username":       viewer.username,
+		"display_name":   "Viewer Profile",
+		"bio":            "looking for plans",
+		"visibility":     "public",
+		"allow_follow":   true,
+		"allow_messages": true,
+		"discoverable":   true,
+	}); err != nil {
+		return err
+	}
+
+	code, body, _, err := ownerClient.Get(ctx, "/social/profiles/me", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if err := assert.JSONField(body, "profile.username"); err != nil {
+		return err
+	}
+
+	code, body, _, err = anonClient.Get(ctx, "/social/profiles/"+owner.username, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = viewerClient.PostJSON(ctx, "/social/profiles/"+owner.username+"/follow", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	if err := assertViewerRelationship(ctx, socialInternal, cfg.SocialInternalToken, viewer.userID, owner.username, "viewer_follows"); err != nil {
+		return err
+	}
+
+	if err := patchJSON(ctx, ownerClient, "/social/profiles/me/privacy", map[string]any{"visibility": "private"}); err != nil {
+		return err
+	}
+	code, _, _, err = anonClient.Get(ctx, "/social/profiles/"+owner.username, nil)
+	if err != nil {
+		return err
+	}
+	if code != http.StatusNotFound {
+		return fmt.Errorf("expected anonymous read of private profile to return 404, got %d", code)
+	}
+	code, _, _, err = viewerClient.Get(ctx, "/social/profiles/"+owner.username, nil)
+	if err != nil {
+		return err
+	}
+	if code != http.StatusNotFound {
+		return fmt.Errorf("expected non-owner read of private profile to return 404, got %d", code)
+	}
+
+	if err := patchJSON(ctx, ownerClient, "/social/profiles/me/privacy", map[string]any{"visibility": "friends_only"}); err != nil {
+		return err
+	}
+	code, body, _, err = viewerClient.PostJSON(ctx, "/social/profiles/"+owner.username+"/friend-request", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/profiles/"+viewer.username+"/friend-accept", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if err := assertViewerRelationship(ctx, socialInternal, cfg.SocialInternalToken, viewer.userID, owner.username, "viewer_friend"); err != nil {
+		return err
+	}
+
+	code, body, _, err = viewerClient.Get(ctx, "/social/profiles/"+owner.username, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/profiles/"+viewer.username+"/block", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	code, _, _, err = viewerClient.Get(ctx, "/social/profiles/"+owner.username, nil)
+	if err != nil {
+		return err
+	}
+	if code != http.StatusNotFound {
+		return fmt.Errorf("expected blocked viewer to be hidden from profile, got %d", code)
+	}
+	return nil
+}
+
 func runBodyLimit(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	c, err := newClient(cfg)
 	if err != nil {
@@ -522,6 +679,43 @@ func registerAndLogin(ctx context.Context, c *client.Client, cfg Config) (*authC
 		userID:       idStr,
 		tenantID:     coalesce(me.TenantID, "default"),
 	}, nil
+}
+
+func patchJSON(ctx context.Context, c *client.Client, path string, payload any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	code, respBody, _, err := c.Do(ctx, http.MethodPatch, path, body, map[string]string{
+		"Content-Type":    "application/json",
+		"X-Client-Family": "cli",
+	})
+	if err != nil {
+		return err
+	}
+	return assert.Status(code, http.StatusOK, respBody)
+}
+
+func assertViewerRelationship(ctx context.Context, c *client.Client, internalToken, viewerUserID, username, field string) error {
+	code, body, _, err := c.Get(ctx, "/internal/profiles/"+username+"/authz-context", map[string]string{
+		"X-Internal-Token": internalToken,
+		"X-User-Id":        viewerUserID,
+	})
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		return err
+	}
+	value, ok := out[field].(bool)
+	if !ok || !value {
+		return fmt.Errorf("expected %s=true, got body=%s", field, string(body))
+	}
+	return nil
 }
 
 func cookieValue(c *client.Client, cfg Config, name string) string {

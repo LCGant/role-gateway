@@ -19,11 +19,12 @@ func testLogger() *slog.Logger {
 }
 
 // testConfig creates a Config for testing with specified upstream URLs.
-func testConfig(authURL, pdpURL string) config.Config {
+func testConfig(authURL, pdpURL, socialURL string) config.Config {
 	return config.Config{
 		HTTPAddr:          ":0",
 		AuthUpstream:      authURL,
 		PDPUpstream:       pdpURL,
+		SocialUpstream:    socialURL,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -47,7 +48,7 @@ func TestAuthPrefixRewrite(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := testConfig(upstream.URL, upstream.URL)
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
 	h, err := NewHandler(cfg, testLogger())
 	if err != nil {
 		t.Fatalf("NewHandler error: %v", err)
@@ -74,7 +75,7 @@ func TestPDPAdminBlockedByDefault(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := testConfig(upstream.URL, upstream.URL)
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
 	h, err := NewHandler(cfg, testLogger())
 	if err != nil {
 		t.Fatalf("NewHandler error: %v", err)
@@ -101,7 +102,7 @@ func TestPDPAdminAllowedFromLocalWhenEnabled(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := testConfig(upstream.URL, upstream.URL)
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
 	cfg.EnablePDPAdmin = true
 
 	h, err := NewHandler(cfg, testLogger())
@@ -127,7 +128,7 @@ func TestPDPAdminSpoofedLoopbackDenied(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := testConfig(upstream.URL, upstream.URL)
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
 	cfg.EnablePDPAdmin = true
 	cfg.TrustedCIDRs = []string{"10.0.0.0/8"}
 
@@ -153,7 +154,7 @@ func TestGatewayMetricsBlockedForNonLoopback(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := testConfig(upstream.URL, upstream.URL)
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
 	h, err := NewHandler(cfg, testLogger())
 	if err != nil {
 		t.Fatalf("NewHandler error: %v", err)
@@ -175,7 +176,7 @@ func TestGatewayMetricsAllowedForLoopback(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := testConfig(upstream.URL, upstream.URL)
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
 	h, err := NewHandler(cfg, testLogger())
 	if err != nil {
 		t.Fatalf("NewHandler error: %v", err)
@@ -197,7 +198,7 @@ func TestPDPDecisionEndpointsBlocked(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := testConfig(upstream.URL, upstream.URL)
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
 	h, err := NewHandler(cfg, testLogger())
 	if err != nil {
 		t.Fatalf("NewHandler error: %v", err)
@@ -221,7 +222,7 @@ func TestAuthInternalEndpointsBlocked(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := testConfig(upstream.URL, upstream.URL)
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
 	h, err := NewHandler(cfg, testLogger())
 	if err != nil {
 		t.Fatalf("NewHandler error: %v", err)
@@ -247,7 +248,7 @@ func TestNotificationAndAuditPrefixesBlocked(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := testConfig(upstream.URL, upstream.URL)
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
 	h, err := NewHandler(cfg, testLogger())
 	if err != nil {
 		t.Fatalf("NewHandler error: %v", err)
@@ -266,6 +267,60 @@ func TestNotificationAndAuditPrefixesBlocked(t *testing.T) {
 	}
 }
 
+func TestSocialPrefixRewrite(t *testing.T) {
+	var receivedPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
+	h, err := NewHandler(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("NewHandler error: %v", err)
+	}
+
+	server := httptest.NewServer(h)
+	t.Cleanup(server.Close)
+
+	resp, err := server.Client().Get(server.URL + "/social/profiles/alice")
+	if err != nil {
+		t.Fatalf("gateway request failed: %v", err)
+	}
+	resp.Body.Close()
+
+	if receivedPath != "/profiles/alice" {
+		t.Fatalf("expected upstream path /profiles/alice, got %s", receivedPath)
+	}
+}
+
+func TestSocialInternalEndpointsBlocked(t *testing.T) {
+	upstreamCalled := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
+	h, err := NewHandler(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("NewHandler error: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/social/internal/profiles/alice/authz-context", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rr.Code)
+	}
+	if upstreamCalled {
+		t.Fatalf("expected internal social endpoint to be blocked before proxying")
+	}
+}
+
 func TestChunkedRequestBodyOverLimitReturns413(t *testing.T) {
 	upstreamCalled := false
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -274,7 +329,7 @@ func TestChunkedRequestBodyOverLimitReturns413(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := testConfig(upstream.URL, upstream.URL)
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
 	cfg.MaxBodyBytes = 32
 	h, err := NewHandler(cfg, testLogger())
 	if err != nil {
@@ -304,7 +359,7 @@ func TestNonCanonicalPathsRejected(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := testConfig(upstream.URL, upstream.URL)
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
 	h, err := NewHandler(cfg, testLogger())
 	if err != nil {
 		t.Fatalf("NewHandler error: %v", err)
@@ -330,7 +385,7 @@ func TestRateLimit(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := testConfig(upstream.URL, upstream.URL)
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
 	cfg.RateLimitRPS = 1
 	cfg.RateLimitBurst = 1
 
@@ -363,7 +418,7 @@ func TestPayloadTooLargeByContentLength(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := testConfig(upstream.URL, upstream.URL)
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
 	cfg.MaxBodyBytes = 4
 
 	h, err := NewHandler(cfg, testLogger())
@@ -386,7 +441,7 @@ func TestBreakerTripsOnFailures(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := testConfig(upstream.URL, upstream.URL)
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL)
 	cfg.BreakerEnabled = true
 	cfg.BreakerFailures = 1
 	cfg.BreakerReset = time.Minute

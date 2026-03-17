@@ -11,6 +11,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("GATEWAY_HTTP_ADDR", "")
 	t.Setenv("AUTH_UPSTREAM", "")
 	t.Setenv("PDP_UPSTREAM", "")
+	t.Setenv("SOCIAL_UPSTREAM", "")
 	t.Setenv("GATEWAY_READ_HEADER_TIMEOUT", "")
 	t.Setenv("GATEWAY_READ_TIMEOUT", "")
 	t.Setenv("GATEWAY_WRITE_TIMEOUT", "")
@@ -40,7 +41,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("Validate returned error: %v", err)
 	}
 
-	if cfg.HTTPAddr != ":8080" || cfg.AuthUpstream != "http://auth:8080" || cfg.PDPUpstream != "http://pdp:8080" {
+	if cfg.HTTPAddr != ":8080" || cfg.AuthUpstream != "http://auth:8080" || cfg.PDPUpstream != "http://pdp:8080" || cfg.SocialUpstream != "http://social:8080" {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 	if cfg.MaxBodyBytes != 1048576 || cfg.MaxHeaderBytes != 64*1024 || cfg.RateLimitBurst != 100 || cfg.RateLimitRPS != 50 || cfg.LoginRateLimitRPS != 15 || cfg.LoginRateLimitBurst != 30 || cfg.RateLimitMaxKeys != 10000 {
@@ -59,6 +60,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("GATEWAY_HTTP_ADDR", "0.0.0.0:9000")
 	t.Setenv("AUTH_UPSTREAM", "http://auth.local:9001")
 	t.Setenv("PDP_UPSTREAM", "http://pdp.local:9002")
+	t.Setenv("SOCIAL_UPSTREAM", "http://social.local:9003")
 	t.Setenv("GATEWAY_READ_HEADER_TIMEOUT", "10s")
 	t.Setenv("GATEWAY_READ_TIMEOUT", "20s")
 	t.Setenv("GATEWAY_WRITE_TIMEOUT", "25s")
@@ -87,7 +89,7 @@ func TestLoadOverrides(t *testing.T) {
 		t.Fatalf("Validate returned error: %v", err)
 	}
 
-	if cfg.HTTPAddr != "0.0.0.0:9000" || cfg.AuthUpstream != "http://auth.local:9001" || cfg.PDPUpstream != "http://pdp.local:9002" {
+	if cfg.HTTPAddr != "0.0.0.0:9000" || cfg.AuthUpstream != "http://auth.local:9001" || cfg.PDPUpstream != "http://pdp.local:9002" || cfg.SocialUpstream != "http://social.local:9003" {
 		t.Fatalf("overrides not applied: %+v", cfg)
 	}
 	if cfg.ReadHeaderTimeout != 10*time.Second || cfg.ReadTimeout != 20*time.Second || cfg.WriteTimeout != 25*time.Second || cfg.IdleTimeout != 70*time.Second {

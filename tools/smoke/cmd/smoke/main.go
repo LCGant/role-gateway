@@ -30,6 +30,7 @@ func main() {
 		flows.AuthIntrospectScenario(),
 		flows.AuthMFAScenario(),
 		flows.PDPDecisionScenario(),
+		flows.SocialProfileScenario(),
 		flows.BodyLimitScenario(),
 	}
 
