@@ -22,7 +22,9 @@ type Config struct {
 	Timeout                    time.Duration
 	Verbose                    bool
 	SessionCookie              string
+	DeviceCookie               string
 	RedisAddr                  string
+	RedisPassword              string
 }
 
 func LoadConfig() Config {
@@ -33,12 +35,17 @@ func LoadConfig() Config {
 	timeout := parseDuration(getenv("SMOKE_TIMEOUT", "60s"), 60*time.Second)
 	verbose := parseBool(getenv("SMOKE_VERBOSE", "false"))
 	sessionCookie := getenv("SMOKE_SESSION_COOKIE", "session_id")
+	deviceCookie := getenv("SMOKE_DEVICE_COOKIE", "device_id")
 	redisAddr := getenv("SMOKE_REDIS_ADDR", "redis:6379")
-	authInternalToken := os.Getenv("SMOKE_AUTH_INTERNAL_TOKEN")
-	if authInternalToken == "" {
-		authInternalToken = os.Getenv("SMOKE_INTERNAL_TOKEN")
+	redisPassword := strings.TrimSpace(os.Getenv("SMOKE_REDIS_PASSWORD"))
+	if redisPassword == "" {
+		redisPassword = strings.TrimSpace(os.Getenv("REDIS_PASSWORD"))
 	}
-	authEmailVerificationToken := os.Getenv("SMOKE_AUTH_EMAIL_VERIFICATION_TOKEN")
+	authInternalToken := strings.TrimSpace(os.Getenv("SMOKE_AUTH_INTERNAL_TOKEN"))
+	if authInternalToken == "" {
+		authInternalToken = strings.TrimSpace(os.Getenv("SMOKE_INTERNAL_TOKEN"))
+	}
+	authEmailVerificationToken := strings.TrimSpace(os.Getenv("SMOKE_AUTH_EMAIL_VERIFICATION_TOKEN"))
 
 	return Config{
 		BaseURL:                    strings.TrimRight(base, "/"),
@@ -47,14 +54,16 @@ func LoadConfig() Config {
 		SocialBaseURL:              strings.TrimRight(socialBase, "/"),
 		AuthInternalToken:          authInternalToken,
 		AuthEmailVerificationToken: authEmailVerificationToken,
-		SocialInternalToken:        os.Getenv("SMOKE_SOCIAL_INTERNAL_TOKEN"),
+		SocialInternalToken:        strings.TrimSpace(os.Getenv("SMOKE_SOCIAL_INTERNAL_TOKEN")),
 		NotificationOutboxDir:      strings.TrimSpace(os.Getenv("SMOKE_NOTIFICATION_OUTBOX_DIR")),
-		PDPInternalToken:           os.Getenv("SMOKE_PDP_INTERNAL_TOKEN"),
-		AdminToken:                 os.Getenv("SMOKE_ADMIN_TOKEN"),
+		PDPInternalToken:           strings.TrimSpace(os.Getenv("SMOKE_PDP_INTERNAL_TOKEN")),
+		AdminToken:                 strings.TrimSpace(os.Getenv("SMOKE_ADMIN_TOKEN")),
 		Timeout:                    timeout,
 		Verbose:                    verbose,
 		SessionCookie:              sessionCookie,
+		DeviceCookie:               deviceCookie,
 		RedisAddr:                  redisAddr,
+		RedisPassword:              redisPassword,
 	}
 }
 

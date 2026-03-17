@@ -1,8 +1,9 @@
-FROM golang:1.24.11-alpine AS builder
+﻿FROM golang:1.26.1-alpine AS builder
 WORKDIR /src
-COPY go.mod ./
+COPY tools/smoke/go.mod ./tools/smoke/go.mod
+WORKDIR /src/tools/smoke
 RUN go mod download
-COPY . .
+COPY tools/smoke ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/smoke ./cmd/smoke
 
 FROM alpine:3.19

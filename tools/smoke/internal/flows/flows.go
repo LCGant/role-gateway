@@ -59,6 +59,7 @@ type authContext struct {
 	password     string
 	csrf         string
 	sessionToken string
+	deviceToken  string
 	userID       string
 	tenantID     string
 }
@@ -186,6 +187,7 @@ func runAuthIntrospect(ctx context.Context, cfg Config, logger *slog.Logger) err
 	hdr := map[string]string{
 		"X-Internal-Token": cfg.AuthInternalToken,
 		"X-Session-Token":  ac.sessionToken,
+		"X-Device-Token":   ac.deviceToken,
 		"X-CSRF-Token":     csrf,
 	}
 	code, body, _, err := authClient.PostJSON(ctx, "/internal/sessions/introspect", map[string]any{}, hdr)
@@ -217,13 +219,18 @@ func runAuthMFA(ctx context.Context, cfg Config, logger *slog.Logger) error {
 		return err
 	}
 	hdr := map[string]string{"X-CSRF-Token": ac.csrf}
-	code, body, _, err := c.PostJSON(ctx, "/auth/mfa/totp/setup", nil, hdr)
+	code, body, _, err := c.PostJSON(ctx, "/auth/mfa/totp/setup", map[string]string{"current_password": ac.password}, hdr)
 	if err != nil {
 		return err
 	}
 	if err := assert.Status(code, http.StatusOK, body); err != nil {
 		return err
 	}
+	csrfAfterSetup := cookieValue(c, cfg, "csrf_token")
+	if csrfAfterSetup == "" {
+		return errors.New("csrf missing after totp setup")
+	}
+	hdr = map[string]string{"X-CSRF-Token": csrfAfterSetup}
 	var setup struct {
 		Secret string `json:"secret"`
 	}
@@ -237,7 +244,7 @@ func runAuthMFA(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	verifyBody := map[string]string{"code": codeStr}
+	verifyBody := map[string]string{"code": codeStr, "current_password": ac.password}
 	code, body, _, err = c.PostJSON(ctx, "/auth/mfa/totp/verify", verifyBody, hdr)
 	if err != nil {
 		return err
@@ -245,6 +252,11 @@ func runAuthMFA(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	if err := assert.Status(code, http.StatusOK, body); err != nil {
 		return err
 	}
+	csrfAfterVerify := cookieValue(c, cfg, "csrf_token")
+	if csrfAfterVerify == "" {
+		return errors.New("csrf missing after totp verify")
+	}
+	hdr = map[string]string{"X-CSRF-Token": csrfAfterVerify}
 	var vr struct {
 		BackupCodes []string `json:"backup_codes"`
 	}
@@ -327,6 +339,7 @@ func runPDPDecision(ctx context.Context, cfg Config, logger *slog.Logger) error 
 	hdr := map[string]string{
 		"X-Internal-Token": cfg.AuthInternalToken,
 		"X-Session-Token":  ac.sessionToken,
+		"X-Device-Token":   ac.deviceToken,
 	}
 	code, body, _, err := authClient.PostJSON(ctx, "/internal/sessions/introspect", map[string]any{}, hdr)
 	if err != nil {
@@ -643,13 +656,24 @@ func registerAndLogin(ctx context.Context, c *client.Client, cfg Config) (*authC
 	if code == http.StatusTooManyRequests {
 		return nil, fmt.Errorf("login rate limited after retries")
 	}
+	var loginResp struct {
+		CSRFToken string `json:"csrf_token"`
+	}
+	_ = json.Unmarshal(body, &loginResp)
 	csrf := cookieValue(c, cfg, "csrf_token")
 	if csrf == "" {
-		return nil, errors.New("csrf cookie missing")
+		csrf = strings.TrimSpace(loginResp.CSRFToken)
+	}
+	if csrf == "" {
+		return nil, errors.New("csrf token missing from cookie and body")
 	}
 	sess := cookieValue(c, cfg, cfg.SessionCookie)
 	if sess == "" {
 		return nil, errors.New("session cookie missing")
+	}
+	deviceToken := cookieValue(c, cfg, cfg.DeviceCookie)
+	if deviceToken == "" {
+		return nil, errors.New("device cookie missing")
 	}
 	// fetch /me for ids
 	code, body, _, err = c.Get(ctx, "/auth/me", nil)
@@ -676,6 +700,7 @@ func registerAndLogin(ctx context.Context, c *client.Client, cfg Config) (*authC
 		password:     password,
 		csrf:         csrf,
 		sessionToken: sess,
+		deviceToken:  deviceToken,
 		userID:       idStr,
 		tenantID:     coalesce(me.TenantID, "default"),
 	}, nil

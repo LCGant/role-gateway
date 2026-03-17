@@ -1,9 +1,11 @@
-FROM golang:1.24.11-alpine AS builder
+﻿FROM golang:1.26.1-alpine AS builder
 
 WORKDIR /src
-COPY go.mod ./
+COPY gateway/go.mod ./gateway/go.mod
+COPY libs/common ./libs/common
+WORKDIR /src/gateway
 RUN go mod download
-COPY . .
+COPY gateway ./
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/gateway ./cmd/gateway
 
