@@ -47,6 +47,10 @@ func SocialProfileScenario() Scenario {
 	return Scenario{Name: "social_profile", Run: runSocialProfile}
 }
 
+func SocialPlacesScenario() Scenario {
+	return Scenario{Name: "social_places", Run: runSocialPlaces}
+}
+
 func BodyLimitScenario() Scenario {
 	return Scenario{Name: "payload_limit", Run: runBodyLimit}
 }
@@ -573,6 +577,221 @@ func runSocialProfile(ctx context.Context, cfg Config, logger *slog.Logger) erro
 	return nil
 }
 
+func runSocialPlaces(ctx context.Context, cfg Config, logger *slog.Logger) error {
+	if cfg.SocialInternalToken == "" {
+		return errors.New("SMOKE_SOCIAL_INTERNAL_TOKEN not set")
+	}
+
+	ownerClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	anonClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	socialInternal, err := newSocialInternalClient(cfg)
+	if err != nil {
+		return err
+	}
+
+	owner, err := registerAndLogin(ctx, ownerClient, cfg)
+	if err != nil {
+		return err
+	}
+	if err := patchJSON(ctx, ownerClient, "/social/profiles/me", map[string]any{
+		"username":       owner.username,
+		"display_name":   "Place Owner",
+		"bio":            "curating nearby places",
+		"visibility":     "public",
+		"allow_follow":   true,
+		"allow_messages": true,
+		"discoverable":   true,
+	}); err != nil {
+		return err
+	}
+
+	latitude := -23.55052
+	longitude := -46.633308
+	placePayload := map[string]any{
+		"name":         "Smoke Place Cafe",
+		"category":     "coffee_shop",
+		"description":  "smoke test place",
+		"address_line": "Rua Augusta, 10",
+		"city":         "Sao Paulo",
+		"region":       "SP",
+		"country_code": "BR",
+		"postal_code":  "01305-000",
+		"latitude":     latitude,
+		"longitude":    longitude,
+		"price_level":  2,
+	}
+	code, body, _, err := ownerClient.PostJSON(ctx, "/social/places", placePayload, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+	var createPlaceResp struct {
+		Place struct {
+			ID           string  `json:"id"`
+			Name         string  `json:"name"`
+			RatingAvg    float64 `json:"rating_average"`
+			RatingsCount int     `json:"ratings_count"`
+		} `json:"place"`
+	}
+	if err := json.Unmarshal(body, &createPlaceResp); err != nil {
+		return err
+	}
+	if createPlaceResp.Place.ID == "" {
+		return errors.New("place id missing")
+	}
+	if createPlaceResp.Place.RatingsCount != 0 {
+		return fmt.Errorf("expected empty place ratings count, got %d", createPlaceResp.Place.RatingsCount)
+	}
+
+	reviewPayload := map[string]any{
+		"place_id":   createPlaceResp.Place.ID,
+		"rating":     5,
+		"title":      "Excelente",
+		"body":       "bom cafe e ambiente",
+		"visibility": "public",
+	}
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/profiles/me/reviews", reviewPayload, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = anonClient.Get(ctx, "/social/places/"+createPlaceResp.Place.ID, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	var placeDetail struct {
+		Place struct {
+			ID           string           `json:"id"`
+			Name         string           `json:"name"`
+			RatingAvg    float64          `json:"rating_average"`
+			RatingsCount int              `json:"ratings_count"`
+			Media        []map[string]any `json:"media"`
+			CoverMedia   map[string]any   `json:"cover_media"`
+		} `json:"place"`
+	}
+	if err := json.Unmarshal(body, &placeDetail); err != nil {
+		return err
+	}
+	if placeDetail.Place.RatingsCount != 1 {
+		return fmt.Errorf("expected ratings_count=1, got %d", placeDetail.Place.RatingsCount)
+	}
+	if placeDetail.Place.RatingAvg != 5 {
+		return fmt.Errorf("expected rating_average=5, got %v", placeDetail.Place.RatingAvg)
+	}
+
+	assetPayload := map[string]any{
+		"media_type": "image",
+		"source_url": "https://example.com/place-cover.jpg",
+	}
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/media-assets/intake", assetPayload, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+	var assetResp struct {
+		Asset struct {
+			ID string `json:"id"`
+		} `json:"asset"`
+	}
+	if err := json.Unmarshal(body, &assetResp); err != nil {
+		return err
+	}
+	if assetResp.Asset.ID == "" {
+		return errors.New("asset id missing")
+	}
+
+	mediaBase := strings.TrimRight(cfg.SocialBaseURL, "/") + "/media/" + assetResp.Asset.ID
+	code, body, _, err = socialInternal.PostJSON(ctx, "/internal/media-assets/"+assetResp.Asset.ID+"/status", map[string]any{
+		"status":        "ready",
+		"media_url":     mediaBase + "/place-cover.jpg",
+		"thumbnail_url": mediaBase + "/place-cover-thumb.jpg",
+	}, map[string]string{"X-Internal-Token": cfg.SocialInternalToken})
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/places/"+createPlaceResp.Place.ID+"/media", map[string]any{"asset_id": assetResp.Asset.ID}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = anonClient.Get(ctx, "/social/places/"+createPlaceResp.Place.ID, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(body, &placeDetail); err != nil {
+		return err
+	}
+	if len(placeDetail.Place.Media) != 1 {
+		return fmt.Errorf("expected 1 place media item, got %d", len(placeDetail.Place.Media))
+	}
+	if len(placeDetail.Place.CoverMedia) == 0 {
+		return errors.New("expected cover_media in place payload")
+	}
+	if got := strings.TrimSpace(asString(placeDetail.Place.CoverMedia["asset_id"])); got != assetResp.Asset.ID {
+		return fmt.Errorf("expected cover_media.asset_id=%s, got %q", assetResp.Asset.ID, got)
+	}
+
+	code, body, _, err = anonClient.Get(ctx, "/social/places/search?q=Smoke%20Place&category=coffee_shop&limit=5", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if !responseContainsPlaceID(body, createPlaceResp.Place.ID) {
+		return fmt.Errorf("search response missing place %s: %s", createPlaceResp.Place.ID, string(body))
+	}
+
+	code, body, _, err = anonClient.Get(ctx, "/social/places/nearby?lat=-23.55052&lng=-46.633308&radius_m=1500&limit=5", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if !responseContainsPlaceID(body, createPlaceResp.Place.ID) {
+		return fmt.Errorf("nearby response missing place %s: %s", createPlaceResp.Place.ID, string(body))
+	}
+
+	code, body, _, err = ownerClient.Get(ctx, "/social/places/me", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if !responseContainsPlaceID(body, createPlaceResp.Place.ID) {
+		return fmt.Errorf("my places response missing place %s: %s", createPlaceResp.Place.ID, string(body))
+	}
+	return nil
+}
+
 func runBodyLimit(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	c, err := newClient(cfg)
 	if err != nil {
@@ -809,4 +1028,36 @@ func coalesce(v, def string) string {
 		return def
 	}
 	return v
+}
+
+func responseContainsPlaceID(body []byte, placeID string) bool {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+	raw, ok := payload["places"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range raw {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(asString(entry["id"])) == placeID {
+			return true
+		}
+	}
+	return false
+}
+
+func asString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	default:
+		return fmt.Sprintf("%v", value)
+	}
 }
