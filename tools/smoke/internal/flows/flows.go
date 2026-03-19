@@ -51,6 +51,14 @@ func SocialPlacesScenario() Scenario {
 	return Scenario{Name: "social_places", Run: runSocialPlaces}
 }
 
+func SocialPlaylistsScenario() Scenario {
+	return Scenario{Name: "social_playlists", Run: runSocialPlaylists}
+}
+
+func SocialEventsScenario() Scenario {
+	return Scenario{Name: "social_events", Run: runSocialEvents}
+}
+
 func BodyLimitScenario() Scenario {
 	return Scenario{Name: "payload_limit", Run: runBodyLimit}
 }
@@ -792,6 +800,298 @@ func runSocialPlaces(ctx context.Context, cfg Config, logger *slog.Logger) error
 	return nil
 }
 
+func runSocialPlaylists(ctx context.Context, cfg Config, logger *slog.Logger) error {
+	ownerClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	collabClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+
+	owner, err := registerAndLogin(ctx, ownerClient, cfg)
+	if err != nil {
+		return err
+	}
+	collab, err := registerAndLogin(ctx, collabClient, cfg)
+	if err != nil {
+		return err
+	}
+
+	if err := ensurePublicProfile(ctx, ownerClient, owner, "Playlist Owner", "curating playlists"); err != nil {
+		return err
+	}
+	if err := ensurePublicProfile(ctx, collabClient, collab, "Playlist Guest", "adding new spots"); err != nil {
+		return err
+	}
+
+	code, body, _, err := ownerClient.PostJSON(ctx, "/social/playlists", map[string]any{
+		"title":       "Smoke Playlist",
+		"description": "shared places for tonight",
+		"visibility":  "shared",
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+	var createResp struct {
+		Playlist struct {
+			ID string `json:"id"`
+		} `json:"playlist"`
+	}
+	if err := json.Unmarshal(body, &createResp); err != nil {
+		return err
+	}
+	if createResp.Playlist.ID == "" {
+		return errors.New("playlist id missing")
+	}
+
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/playlists/"+createResp.Playlist.ID+"/items", map[string]any{
+		"name_snapshot":    "Cafe Blue",
+		"address_snapshot": "Rua Augusta, 10",
+		"note":             "good coffee",
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+
+	code, _, _, err = collabClient.Get(ctx, "/social/playlists/"+createResp.Playlist.ID, nil)
+	if err != nil {
+		return err
+	}
+	if code != http.StatusNotFound {
+		return fmt.Errorf("expected shared playlist to be hidden before share, got %d", code)
+	}
+
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/playlists/"+createResp.Playlist.ID+"/share/"+collab.username, map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = collabClient.Get(ctx, "/social/playlists/"+createResp.Playlist.ID, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	var playlistView struct {
+		Playlist struct {
+			ID string `json:"id"`
+		} `json:"playlist"`
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(body, &playlistView); err != nil {
+		return err
+	}
+	if len(playlistView.Items) != 1 {
+		return fmt.Errorf("expected 1 playlist item after share, got %d", len(playlistView.Items))
+	}
+
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/playlists/"+createResp.Playlist.ID+"/collaborators/"+collab.username, map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = collabClient.PostJSON(ctx, "/social/playlists/"+createResp.Playlist.ID+"/items", map[string]any{
+		"name_snapshot":    "Jazz Club",
+		"address_snapshot": "Paulista, 200",
+		"note":             "late night option",
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = collabClient.Get(ctx, "/social/playlists/"+createResp.Playlist.ID, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(body, &playlistView); err != nil {
+		return err
+	}
+	if len(playlistView.Items) != 2 {
+		return fmt.Errorf("expected 2 playlist items after collaborator edit, got %d", len(playlistView.Items))
+	}
+
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/profiles/"+collab.username+"/block", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, _, _, err = collabClient.Get(ctx, "/social/playlists/"+createResp.Playlist.ID, nil)
+	if err != nil {
+		return err
+	}
+	if code != http.StatusNotFound {
+		return fmt.Errorf("expected blocked collaborator to lose playlist access, got %d", code)
+	}
+	return nil
+}
+
+func runSocialEvents(ctx context.Context, cfg Config, logger *slog.Logger) error {
+	ownerClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	guestClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	anonClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+
+	owner, err := registerAndLogin(ctx, ownerClient, cfg)
+	if err != nil {
+		return err
+	}
+	guest, err := registerAndLogin(ctx, guestClient, cfg)
+	if err != nil {
+		return err
+	}
+
+	if err := ensurePublicProfile(ctx, ownerClient, owner, "Event Owner", "planning the night"); err != nil {
+		return err
+	}
+	if err := ensurePublicProfile(ctx, guestClient, guest, "Event Guest", "joining the plans"); err != nil {
+		return err
+	}
+
+	startAt := time.Now().UTC().Add(4 * time.Hour).Format(time.RFC3339)
+	endAt := time.Now().UTC().Add(6 * time.Hour).Format(time.RFC3339)
+	code, body, _, err := ownerClient.PostJSON(ctx, "/social/events", map[string]any{
+		"title":            "Smoke Event",
+		"description":      "night out",
+		"visibility":       "invite_only",
+		"status":           "voting",
+		"start_at":         startAt,
+		"end_at":           endAt,
+		"timezone":         "America/Sao_Paulo",
+		"name_snapshot":    "Bar Central",
+		"address_snapshot": "Rua Haddock Lobo, 12",
+		"latitude":         -23.5614,
+		"longitude":        -46.6565,
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+	var createResp struct {
+		Event struct {
+			ID string `json:"id"`
+		} `json:"event"`
+	}
+	if err := json.Unmarshal(body, &createResp); err != nil {
+		return err
+	}
+	if createResp.Event.ID == "" {
+		return errors.New("event id missing")
+	}
+
+	code, _, _, err = anonClient.Get(ctx, "/social/events/"+createResp.Event.ID, nil)
+	if err != nil {
+		return err
+	}
+	if code != http.StatusNotFound {
+		return fmt.Errorf("expected anonymous read of invite-only event to return 404, got %d", code)
+	}
+
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/events/"+createResp.Event.ID+"/invite/"+guest.username, map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = guestClient.Get(ctx, "/social/events/me", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if !responseContainsEventID(body, createResp.Event.ID) {
+		return fmt.Errorf("my events response missing event %s: %s", createResp.Event.ID, string(body))
+	}
+
+	code, body, _, err = guestClient.Get(ctx, "/social/events/"+createResp.Event.ID, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = guestClient.PostJSON(ctx, "/social/events/"+createResp.Event.ID+"/rsvp", map[string]any{"status": "going"}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/events/"+createResp.Event.ID+"/organizers/"+guest.username, map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = ownerClient.Get(ctx, "/social/events/"+createResp.Event.ID, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if !eventParticipantsContainUser(body, guest.username, "organizer") {
+		return fmt.Errorf("expected organizer participant view for %s: %s", guest.username, string(body))
+	}
+
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/profiles/"+guest.username+"/block", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, _, _, err = guestClient.Get(ctx, "/social/events/"+createResp.Event.ID, nil)
+	if err != nil {
+		return err
+	}
+	if code != http.StatusNotFound {
+		return fmt.Errorf("expected blocked event participant to lose access, got %d", code)
+	}
+	return nil
+}
+
 func runBodyLimit(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	c, err := newClient(cfg)
 	if err != nil {
@@ -1030,6 +1330,18 @@ func coalesce(v, def string) string {
 	return v
 }
 
+func ensurePublicProfile(ctx context.Context, c *client.Client, ac *authContext, displayName, bio string) error {
+	return patchJSON(ctx, c, "/social/profiles/me", map[string]any{
+		"username":       ac.username,
+		"display_name":   displayName,
+		"bio":            bio,
+		"visibility":     "public",
+		"allow_follow":   true,
+		"allow_messages": true,
+		"discoverable":   true,
+	})
+}
+
 func responseContainsPlaceID(body []byte, placeID string) bool {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -1045,6 +1357,52 @@ func responseContainsPlaceID(body []byte, placeID string) bool {
 			continue
 		}
 		if strings.TrimSpace(asString(entry["id"])) == placeID {
+			return true
+		}
+	}
+	return false
+}
+
+func responseContainsEventID(body []byte, eventID string) bool {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+	raw, ok := payload["events"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range raw {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(asString(entry["id"])) == eventID {
+			return true
+		}
+	}
+	return false
+}
+
+func eventParticipantsContainUser(body []byte, username, role string) bool {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+	raw, ok := payload["participants"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range raw {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		identity, ok := entry["identity"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(asString(identity["username"])) == username && strings.TrimSpace(asString(entry["role"])) == role {
 			return true
 		}
 	}
