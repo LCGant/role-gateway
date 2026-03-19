@@ -32,6 +32,7 @@ func main() {
 		flows.PDPDecisionScenario(),
 		flows.SocialProfileScenario(),
 		flows.SocialPlacesScenario(),
+		flows.SocialMapScenario(),
 		flows.SocialPlaylistsScenario(),
 		flows.SocialEventsScenario(),
 		flows.BodyLimitScenario(),

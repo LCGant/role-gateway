@@ -51,6 +51,10 @@ func SocialPlacesScenario() Scenario {
 	return Scenario{Name: "social_places", Run: runSocialPlaces}
 }
 
+func SocialMapScenario() Scenario {
+	return Scenario{Name: "social_map", Run: runSocialMap}
+}
+
 func SocialPlaylistsScenario() Scenario {
 	return Scenario{Name: "social_playlists", Run: runSocialPlaylists}
 }
@@ -797,6 +801,170 @@ func runSocialPlaces(ctx context.Context, cfg Config, logger *slog.Logger) error
 	if !responseContainsPlaceID(body, createPlaceResp.Place.ID) {
 		return fmt.Errorf("my places response missing place %s: %s", createPlaceResp.Place.ID, string(body))
 	}
+	return nil
+}
+
+func runSocialMap(ctx context.Context, cfg Config, logger *slog.Logger) error {
+	ownerClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	anonClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+
+	owner, err := registerAndLogin(ctx, ownerClient, cfg)
+	if err != nil {
+		return err
+	}
+	if err := ensurePublicProfile(ctx, ownerClient, owner, "Map Owner", "mapping places"); err != nil {
+		return err
+	}
+
+	code, body, _, err := ownerClient.PostJSON(ctx, "/social/places", map[string]any{
+		"name":                 "Map Rooftop Cafe",
+		"category":             "coffee_shop",
+		"description":          "rooftop and wifi",
+		"about":                "ótimo para amigos e encontros",
+		"address_line":         "Rua Augusta, 200",
+		"city":                 "Sao Paulo",
+		"region":               "SP",
+		"country_code":         "BR",
+		"postal_code":          "01305-100",
+		"latitude":             -23.55052,
+		"longitude":            -46.633308,
+		"price_level":          2,
+		"is_accessible":        true,
+		"is_outdoor":           true,
+		"is_family_friendly":   true,
+		"is_pet_friendly":      false,
+		"has_parking":          false,
+		"has_wifi":             true,
+		"serves_alcohol":       true,
+		"accepts_reservations": true,
+		"highlights":           []string{"rooftop", "live_music"},
+		"recommended_for":      []string{"friends", "date_night"},
+		"hours": []map[string]any{{
+			"day_of_week": 5,
+			"opens_at":    "18:00",
+			"closes_at":   "23:30",
+			"closed":      false,
+		}},
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+	var matching struct {
+		Place struct {
+			ID string `json:"id"`
+		} `json:"place"`
+	}
+	if err := json.Unmarshal(body, &matching); err != nil {
+		return err
+	}
+	if strings.TrimSpace(matching.Place.ID) == "" {
+		return errors.New("map place id missing")
+	}
+
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/places", map[string]any{
+		"name":                 "Map Indoor Bar",
+		"category":             "bar",
+		"description":          "indoor and louder",
+		"address_line":         "Rua B, 20",
+		"city":                 "Sao Paulo",
+		"region":               "SP",
+		"country_code":         "BR",
+		"postal_code":          "01305-200",
+		"latitude":             -23.552,
+		"longitude":            -46.636,
+		"price_level":          4,
+		"is_accessible":        false,
+		"is_outdoor":           false,
+		"is_family_friendly":   false,
+		"is_pet_friendly":      false,
+		"has_parking":          true,
+		"has_wifi":             false,
+		"serves_alcohol":       true,
+		"accepts_reservations": false,
+		"highlights":           []string{"indoor"},
+		"recommended_for":      []string{"nightlife"},
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = anonClient.Get(ctx, "/social/map/places/nearby?lat=-23.55052&lng=-46.633308&radius_m=2000&accessible=true&outdoor=true&highlight=rooftop&recommended_for=friends&category=coffee_shop", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	var nearby struct {
+		Places []struct {
+			ID             string   `json:"id"`
+			Highlights     []string `json:"highlights"`
+			RecommendedFor []string `json:"recommended_for"`
+			Hours          []struct {
+				DayOfWeek int    `json:"day_of_week"`
+				OpensAt   string `json:"opens_at"`
+				ClosesAt  string `json:"closes_at"`
+				Closed    bool   `json:"closed"`
+			} `json:"hours"`
+			Amenities struct {
+				Accessible          bool `json:"accessible"`
+				Outdoor             bool `json:"outdoor"`
+				FamilyFriendly      bool `json:"family_friendly"`
+				PetFriendly         bool `json:"pet_friendly"`
+				Parking             bool `json:"parking"`
+				Wifi                bool `json:"wifi"`
+				ServesAlcohol       bool `json:"serves_alcohol"`
+				AcceptsReservations bool `json:"accepts_reservations"`
+			} `json:"amenities"`
+		} `json:"places"`
+	}
+	if err := json.Unmarshal(body, &nearby); err != nil {
+		return err
+	}
+	if len(nearby.Places) != 1 {
+		return fmt.Errorf("expected 1 map nearby result, got %d body=%s", len(nearby.Places), string(body))
+	}
+	if nearby.Places[0].ID != matching.Place.ID {
+		return fmt.Errorf("expected filtered map nearby result %s, got %s", matching.Place.ID, nearby.Places[0].ID)
+	}
+	if !nearby.Places[0].Amenities.Accessible || !nearby.Places[0].Amenities.Outdoor || !nearby.Places[0].Amenities.Wifi || !nearby.Places[0].Amenities.AcceptsReservations {
+		return fmt.Errorf("expected map amenities in payload, got body=%s", string(body))
+	}
+	if len(nearby.Places[0].Highlights) != 2 || len(nearby.Places[0].RecommendedFor) != 2 || len(nearby.Places[0].Hours) != 1 {
+		return fmt.Errorf("expected highlights/recommended_for/hours in map payload, got body=%s", string(body))
+	}
+
+	code, body, _, err = anonClient.Get(ctx, "/social/map/places/viewport?north=-23.54&south=-23.56&east=-46.62&west=-46.65&category=coffee_shop&highlight=rooftop", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	var viewport struct {
+		Places []struct {
+			ID string `json:"id"`
+		} `json:"places"`
+	}
+	if err := json.Unmarshal(body, &viewport); err != nil {
+		return err
+	}
+	if len(viewport.Places) != 1 || viewport.Places[0].ID != matching.Place.ID {
+		return fmt.Errorf("expected map viewport result %s, got body=%s", matching.Place.ID, string(body))
+	}
+
 	return nil
 }
 
