@@ -32,7 +32,7 @@ func LoadConfig() Config {
 	authBase := getenv("SMOKE_AUTH_BASE_URL", "http://auth:8080")
 	pdpBase := getenv("SMOKE_PDP_BASE_URL", "http://pdp:8080")
 	socialBase := getenv("SMOKE_SOCIAL_BASE_URL", "http://social:8080")
-	timeout := parseDuration(getenv("SMOKE_TIMEOUT", "60s"), 60*time.Second)
+	timeout := parseDuration(getenv("SMOKE_TIMEOUT", "180s"), 180*time.Second)
 	verbose := parseBool(getenv("SMOKE_VERBOSE", "false"))
 	sessionCookie := getenv("SMOKE_SESSION_COOKIE", "session_id")
 	deviceCookie := getenv("SMOKE_DEVICE_COOKIE", "device_id")

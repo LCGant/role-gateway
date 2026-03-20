@@ -47,6 +47,10 @@ func SocialProfileScenario() Scenario {
 	return Scenario{Name: "social_profile", Run: runSocialProfile}
 }
 
+func SocialFriendsScenario() Scenario {
+	return Scenario{Name: "social_friends", Run: runSocialFriends}
+}
+
 func SocialPlacesScenario() Scenario {
 	return Scenario{Name: "social_places", Run: runSocialPlaces}
 }
@@ -585,6 +589,165 @@ func runSocialProfile(ctx context.Context, cfg Config, logger *slog.Logger) erro
 	}
 	if code != http.StatusNotFound {
 		return fmt.Errorf("expected blocked viewer to be hidden from profile, got %d", code)
+	}
+	return nil
+}
+
+func runSocialFriends(ctx context.Context, cfg Config, logger *slog.Logger) error {
+	aliceClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	bobClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	carolClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+
+	alice, err := registerAndLogin(ctx, aliceClient, cfg)
+	if err != nil {
+		return err
+	}
+	bob, err := registerAndLogin(ctx, bobClient, cfg)
+	if err != nil {
+		return err
+	}
+	carol, err := registerAndLogin(ctx, carolClient, cfg)
+	if err != nil {
+		return err
+	}
+
+	if err := ensurePublicProfile(ctx, aliceClient, alice, "Alice Friends", "following friends"); err != nil {
+		return err
+	}
+	if err := ensurePublicProfile(ctx, bobClient, bob, "Bob Friends", "posting with friends"); err != nil {
+		return err
+	}
+	if err := ensurePublicProfile(ctx, carolClient, carol, "Carol Stranger", "not a friend"); err != nil {
+		return err
+	}
+
+	code, body, _, err := bobClient.PostJSON(ctx, "/social/profiles/"+alice.username+"/friend-request", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	code, body, _, err = aliceClient.PostJSON(ctx, "/social/profiles/"+bob.username+"/friend-accept", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = bobClient.PostJSON(ctx, "/social/posts", map[string]any{
+		"caption":    "bob friends post",
+		"visibility": "friends_only",
+		"media": []map[string]any{{
+			"media_type": "video",
+			"media_url":  "https://cdn.example.com/bob-friends.mp4",
+		}},
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = bobClient.PostJSON(ctx, "/social/profiles/me/reviews", map[string]any{
+		"name_snapshot":    "Cafe dos Amigos",
+		"address_snapshot": "Rua dos Amigos, 10",
+		"rating":           5,
+		"title":            "Muito bom",
+		"body":             "ótimo clima para sair com amigos",
+		"visibility":       "friends_only",
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = bobClient.PostJSON(ctx, "/social/profiles/me/library", map[string]any{
+		"entry_type":       "been_there",
+		"name_snapshot":    "Parque dos Amigos",
+		"address_snapshot": "Rua do Parque, 20",
+		"note":             "bom para caminhar",
+		"visibility":       "friends_only",
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = carolClient.PostJSON(ctx, "/social/posts", map[string]any{
+		"caption":    "carol public",
+		"visibility": "public",
+		"media": []map[string]any{{
+			"media_type": "image",
+			"media_url":  "https://cdn.example.com/carol-public.jpg",
+		}},
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = aliceClient.Get(ctx, "/social/feed/friends", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	count, types, usernames, err := decodeFriendActivity(body)
+	if err != nil {
+		return err
+	}
+	if count != 3 {
+		return fmt.Errorf("expected 3 friend activity items, got %d body=%s", count, string(body))
+	}
+	if len(usernames) != 1 || !usernames[bob.username] {
+		return fmt.Errorf("expected only bob activity, got usernames=%v body=%s", usernames, string(body))
+	}
+	for _, want := range []string{"post", "review", "been_there"} {
+		if !types[want] {
+			return fmt.Errorf("expected activity type %s in friends feed, got %v body=%s", want, types, string(body))
+		}
+	}
+
+	code, body, _, err = bobClient.PostJSON(ctx, "/social/profiles/"+alice.username+"/block", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = aliceClient.Get(ctx, "/social/feed/friends", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	count, _, usernames, err = decodeFriendActivity(body)
+	if err != nil {
+		return err
+	}
+	if count != 0 || len(usernames) != 0 {
+		return fmt.Errorf("expected blocked friend activity to disappear, got count=%d body=%s", count, string(body))
 	}
 	return nil
 }
@@ -1575,6 +1738,38 @@ func eventParticipantsContainUser(body []byte, username, role string) bool {
 		}
 	}
 	return false
+}
+
+func decodeFriendActivity(body []byte) (int, map[string]bool, map[string]bool, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return 0, nil, nil, err
+	}
+	raw, ok := payload["items"].([]any)
+	if !ok {
+		return 0, nil, nil, fmt.Errorf("items array missing: %s", string(body))
+	}
+	types := make(map[string]bool)
+	usernames := make(map[string]bool)
+	for _, item := range raw {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		itemType := strings.TrimSpace(asString(entry["type"]))
+		if itemType != "" {
+			types[itemType] = true
+		}
+		actor, ok := entry["actor"].(map[string]any)
+		if !ok {
+			continue
+		}
+		username := strings.TrimSpace(asString(actor["username"]))
+		if username != "" {
+			usernames[username] = true
+		}
+	}
+	return len(raw), types, usernames, nil
 }
 
 func asString(value any) string {

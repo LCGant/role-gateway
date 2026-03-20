@@ -31,6 +31,7 @@ func main() {
 		flows.AuthMFAScenario(),
 		flows.PDPDecisionScenario(),
 		flows.SocialProfileScenario(),
+		flows.SocialFriendsScenario(),
 		flows.SocialPlacesScenario(),
 		flows.SocialMapScenario(),
 		flows.SocialPlaylistsScenario(),
