@@ -55,6 +55,10 @@ func SocialPlacesScenario() Scenario {
 	return Scenario{Name: "social_places", Run: runSocialPlaces}
 }
 
+func SocialPlaceFeedScenario() Scenario {
+	return Scenario{Name: "social_place_feed", Run: runSocialPlaceFeed}
+}
+
 func SocialMapScenario() Scenario {
 	return Scenario{Name: "social_map", Run: runSocialMap}
 }
@@ -964,6 +968,389 @@ func runSocialPlaces(ctx context.Context, cfg Config, logger *slog.Logger) error
 	if !responseContainsPlaceID(body, createPlaceResp.Place.ID) {
 		return fmt.Errorf("my places response missing place %s: %s", createPlaceResp.Place.ID, string(body))
 	}
+	return nil
+}
+
+func runSocialPlaceFeed(ctx context.Context, cfg Config, logger *slog.Logger) error {
+	if cfg.SocialInternalToken == "" {
+		return errors.New("SMOKE_SOCIAL_INTERNAL_TOKEN not set")
+	}
+
+	viewerClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	friendClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	anonClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	socialInternal, err := newSocialInternalClient(cfg)
+	if err != nil {
+		return err
+	}
+
+	viewer, err := registerAndLogin(ctx, viewerClient, cfg)
+	if err != nil {
+		return err
+	}
+	friend, err := registerAndLogin(ctx, friendClient, cfg)
+	if err != nil {
+		return err
+	}
+
+	if err := ensurePublicProfile(ctx, viewerClient, viewer, "Place Feed Viewer", "following friends"); err != nil {
+		return err
+	}
+	if err := patchJSON(ctx, friendClient, "/social/profiles/me", map[string]any{
+		"username":       friend.username,
+		"display_name":   "Place Feed Friend",
+		"bio":            "posting good spots",
+		"visibility":     "friends_only",
+		"allow_follow":   true,
+		"allow_messages": true,
+		"discoverable":   true,
+	}); err != nil {
+		return err
+	}
+
+	code, body, _, err := friendClient.PostJSON(ctx, "/social/profiles/"+viewer.username+"/friend-request", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	code, body, _, err = viewerClient.PostJSON(ctx, "/social/profiles/"+friend.username+"/friend-accept", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	placePayload := map[string]any{
+		"name":                 "Friends Feed Rooftop",
+		"category":             "bar",
+		"description":          "friends feed smoke place",
+		"about":                "rooftop bar for smoke validation",
+		"address_line":         "Rua dos Amigos, 100",
+		"city":                 "Sao Paulo",
+		"region":               "SP",
+		"country_code":         "BR",
+		"postal_code":          "01305-000",
+		"latitude":             -23.55052,
+		"longitude":            -46.633308,
+		"price_level":          3,
+		"is_accessible":        true,
+		"is_outdoor":           true,
+		"accepts_reservations": true,
+	}
+	code, body, _, err = friendClient.PostJSON(ctx, "/social/places", placePayload, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+	var placeResp struct {
+		Place struct {
+			ID string `json:"id"`
+		} `json:"place"`
+	}
+	if err := json.Unmarshal(body, &placeResp); err != nil {
+		return err
+	}
+	if placeResp.Place.ID == "" {
+		return errors.New("place feed scenario missing place id")
+	}
+
+	code, body, _, err = friendClient.PostJSON(ctx, "/social/media-assets/intake", map[string]any{
+		"media_type": "image",
+		"source_url": "https://example.com/friends-feed-cover.jpg",
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+	var assetResp struct {
+		Asset struct {
+			ID string `json:"id"`
+		} `json:"asset"`
+	}
+	if err := json.Unmarshal(body, &assetResp); err != nil {
+		return err
+	}
+	if assetResp.Asset.ID == "" {
+		return errors.New("place feed scenario missing asset id")
+	}
+
+	mediaBase := strings.TrimRight(cfg.SocialBaseURL, "/") + "/media/" + assetResp.Asset.ID
+	code, body, _, err = socialInternal.PostJSON(ctx, "/internal/media-assets/"+assetResp.Asset.ID+"/status", map[string]any{
+		"status":        "ready",
+		"media_url":     mediaBase + "/friends-feed-cover.jpg",
+		"thumbnail_url": mediaBase + "/friends-feed-cover-thumb.jpg",
+	}, map[string]string{"X-Internal-Token": cfg.SocialInternalToken})
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = friendClient.PostJSON(ctx, "/social/places/"+placeResp.Place.ID+"/media", map[string]any{"asset_id": assetResp.Asset.ID}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = friendClient.PostJSON(ctx, "/social/posts", map[string]any{
+		"caption":    "friends feed place post",
+		"visibility": "friends_only",
+		"place_id":   placeResp.Place.ID,
+		"media": []map[string]any{{
+			"media_type": "video",
+			"media_url":  "https://cdn.example.com/friends-feed.mp4",
+		}},
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = friendClient.PostJSON(ctx, "/social/profiles/me/reviews", map[string]any{
+		"place_id":         placeResp.Place.ID,
+		"name_snapshot":    "Friends Feed Rooftop",
+		"address_snapshot": "Rua dos Amigos, 100",
+		"rating":           5,
+		"title":            "Bom demais",
+		"body":             "vale a ida com amigos",
+		"visibility":       "friends_only",
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = friendClient.PostJSON(ctx, "/social/profiles/me/library", map[string]any{
+		"entry_type":       "been_there",
+		"place_id":         placeResp.Place.ID,
+		"name_snapshot":    "Friends Feed Rooftop",
+		"address_snapshot": "Rua dos Amigos, 100",
+		"note":             "bom para sexta-feira",
+		"visibility":       "friends_only",
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+
+	code, _, _, err = anonClient.Get(ctx, "/social/feed/places/friends", nil)
+	if err != nil {
+		return err
+	}
+	if code != http.StatusUnauthorized {
+		return fmt.Errorf("expected anonymous place friends feed to return 401, got %d", code)
+	}
+
+	code, body, _, err = viewerClient.Get(ctx, "/social/feed/places/friends?limit=5", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	var friendsFeed struct {
+		Items []struct {
+			ID         string `json:"id"`
+			ReasonCode string `json:"reason_code"`
+			Place      struct {
+				ID string `json:"id"`
+			} `json:"place"`
+			SocialProof struct {
+				FriendsPostedCount    int `json:"friends_posted_count"`
+				FriendsReviewedCount  int `json:"friends_reviewed_count"`
+				FriendsBeenThereCount int `json:"friends_been_there_count"`
+				Friends               []struct {
+					Username string `json:"username"`
+				} `json:"friends"`
+			} `json:"social_proof"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &friendsFeed); err != nil {
+		return err
+	}
+	if len(friendsFeed.Items) != 1 || friendsFeed.Items[0].Place.ID != placeResp.Place.ID {
+		return fmt.Errorf("expected place friends feed item for %s, got body=%s", placeResp.Place.ID, string(body))
+	}
+	if friendsFeed.Items[0].ReasonCode == "" {
+		return fmt.Errorf("expected reason_code in friends place feed: %s", string(body))
+	}
+	if friendsFeed.Items[0].SocialProof.FriendsPostedCount != 1 || friendsFeed.Items[0].SocialProof.FriendsReviewedCount != 1 || friendsFeed.Items[0].SocialProof.FriendsBeenThereCount != 1 {
+		return fmt.Errorf("unexpected social proof counters: %s", string(body))
+	}
+	if len(friendsFeed.Items[0].SocialProof.Friends) != 1 || friendsFeed.Items[0].SocialProof.Friends[0].Username != friend.username {
+		return fmt.Errorf("unexpected social proof friends payload: %s", string(body))
+	}
+
+	code, body, _, err = viewerClient.Get(ctx, "/social/feed/places/for-you?limit=5", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	var forYouFeed struct {
+		Items []struct {
+			ReasonCode string `json:"reason_code"`
+			Place      struct {
+				ID string `json:"id"`
+			} `json:"place"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &forYouFeed); err != nil {
+		return err
+	}
+	if len(forYouFeed.Items) == 0 || forYouFeed.Items[0].ReasonCode == "" {
+		return fmt.Errorf("expected non-empty for-you place feed with reason code, got body=%s", string(body))
+	}
+	foundPlace := false
+	for _, item := range forYouFeed.Items {
+		if item.Place.ID == placeResp.Place.ID {
+			foundPlace = true
+			if item.ReasonCode == "" {
+				return fmt.Errorf("expected reason_code for place %s in for-you feed", placeResp.Place.ID)
+			}
+			break
+		}
+	}
+	if !foundPlace {
+		return fmt.Errorf("expected for-you place feed to contain %s, got body=%s", placeResp.Place.ID, string(body))
+	}
+
+	code, body, _, err = viewerClient.PostJSON(ctx, "/social/places/"+placeResp.Place.ID+"/like", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	var metricsResp struct {
+		Metrics struct {
+			LikesCount     int  `json:"likes_count"`
+			DislikesCount  int  `json:"dislikes_count"`
+			ViewerLiked    bool `json:"viewer_liked"`
+			ViewerDisliked bool `json:"viewer_disliked"`
+		} `json:"metrics"`
+	}
+	if err := json.Unmarshal(body, &metricsResp); err != nil {
+		return err
+	}
+	if metricsResp.Metrics.LikesCount != 1 || !metricsResp.Metrics.ViewerLiked || metricsResp.Metrics.ViewerDisliked {
+		return fmt.Errorf("unexpected like metrics payload: %s", string(body))
+	}
+
+	code, body, _, err = viewerClient.PostJSON(ctx, "/social/places/"+placeResp.Place.ID+"/dislike", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(body, &metricsResp); err != nil {
+		return err
+	}
+	if metricsResp.Metrics.LikesCount != 0 || metricsResp.Metrics.DislikesCount != 1 || metricsResp.Metrics.ViewerLiked || !metricsResp.Metrics.ViewerDisliked {
+		return fmt.Errorf("unexpected dislike metrics payload: %s", string(body))
+	}
+
+	code, body, _, err = viewerClient.Do(ctx, http.MethodDelete, "/social/places/"+placeResp.Place.ID+"/dislike", nil, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = viewerClient.Get(ctx, "/social/places/"+placeResp.Place.ID, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	var placeDetail struct {
+		Place struct {
+			ID      string `json:"id"`
+			Metrics struct {
+				LikesCount     int  `json:"likes_count"`
+				DislikesCount  int  `json:"dislikes_count"`
+				ViewerLiked    bool `json:"viewer_liked"`
+				ViewerDisliked bool `json:"viewer_disliked"`
+			} `json:"metrics"`
+		} `json:"place"`
+	}
+	if err := json.Unmarshal(body, &placeDetail); err != nil {
+		return err
+	}
+	if placeDetail.Place.ID != placeResp.Place.ID || placeDetail.Place.Metrics.LikesCount != 0 || placeDetail.Place.Metrics.DislikesCount != 0 || placeDetail.Place.Metrics.ViewerLiked || placeDetail.Place.Metrics.ViewerDisliked {
+		return fmt.Errorf("unexpected place metrics after undislike: %s", string(body))
+	}
+
+	code, body, _, err = anonClient.Get(ctx, "/social/places/"+placeResp.Place.ID+"/reviews", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	var anonReviews struct {
+		Reviews []map[string]any `json:"reviews"`
+	}
+	if err := json.Unmarshal(body, &anonReviews); err != nil {
+		return err
+	}
+	if len(anonReviews.Reviews) != 0 {
+		return fmt.Errorf("expected anonymous place reviews to hide friends-only review, got body=%s", string(body))
+	}
+
+	code, body, _, err = viewerClient.Get(ctx, "/social/places/"+placeResp.Place.ID+"/reviews", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	var reviewList struct {
+		Reviews []struct {
+			Author struct {
+				Username string `json:"username"`
+			} `json:"author"`
+			Viewer struct {
+				Friend bool `json:"friend"`
+			} `json:"viewer"`
+		} `json:"reviews"`
+	}
+	if err := json.Unmarshal(body, &reviewList); err != nil {
+		return err
+	}
+	if len(reviewList.Reviews) != 1 || reviewList.Reviews[0].Author.Username != friend.username || !reviewList.Reviews[0].Viewer.Friend {
+		return fmt.Errorf("unexpected place reviews payload for friend viewer: %s", string(body))
+	}
+
 	return nil
 }
 

@@ -33,6 +33,7 @@ func main() {
 		flows.SocialProfileScenario(),
 		flows.SocialFriendsScenario(),
 		flows.SocialPlacesScenario(),
+		flows.SocialPlaceFeedScenario(),
 		flows.SocialMapScenario(),
 		flows.SocialPlaylistsScenario(),
 		flows.SocialEventsScenario(),
