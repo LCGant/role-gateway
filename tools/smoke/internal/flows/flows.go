@@ -1936,6 +1936,16 @@ func runNotificationsInbox(ctx context.Context, cfg Config, logger *slog.Logger)
 	if err != nil {
 		return err
 	}
+	page, err := listNotificationsPage(ctx, aliceClient, 1, 0)
+	if err != nil {
+		return err
+	}
+	if page.Total != 1 || page.UnreadCount != 1 || page.HasMore || page.NextOffset != nil || len(page.Notifications) != 1 {
+		return fmt.Errorf("unexpected notification pagination payload after follow: %+v", page)
+	}
+	if page.Notifications[0].KindLabel == "" || page.Notifications[0].KindGroup == "" || page.Notifications[0].IsRead {
+		return fmt.Errorf("unexpected notification presentation payload after follow: %+v", page.Notifications[0])
+	}
 	followID := ""
 	for _, item := range notifications {
 		if item.Kind == "follow" {
@@ -1991,6 +2001,11 @@ func runNotificationsInbox(ctx context.Context, cfg Config, logger *slog.Logger)
 	if err := assert.Status(code, http.StatusCreated, body); err != nil {
 		return err
 	}
+	if cfg.NotificationOutboxDir != "" {
+		if err := waitForOutboxBody(cfg.NotificationOutboxDir, "social", alice.email, "New comment on your post"); err != nil {
+			return err
+		}
+	}
 
 	secondUnread, err := waitForUnreadCount(ctx, aliceClient, 1)
 	if err != nil {
@@ -2013,6 +2028,76 @@ func runNotificationsInbox(ctx context.Context, cfg Config, logger *slog.Logger)
 	}
 	if !hasComment {
 		return fmt.Errorf("expected post_comment notification in inbox, got %#v", notifications)
+	}
+
+	startAt := time.Now().UTC().Add(3 * time.Hour).Format(time.RFC3339)
+	endAt := time.Now().UTC().Add(5 * time.Hour).Format(time.RFC3339)
+	code, body, _, err = bobClient.PostJSON(ctx, "/social/events", map[string]any{
+		"title":            "Inbox Invite Event",
+		"description":      "notification smoke event",
+		"visibility":       "invite_only",
+		"status":           "confirmed",
+		"start_at":         startAt,
+		"end_at":           endAt,
+		"timezone":         "America/Sao_Paulo",
+		"name_snapshot":    "Inbox Bar",
+		"address_snapshot": "Rua Augusta, 100",
+		"latitude":         -23.55052,
+		"longitude":        -46.633308,
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+	var createEvent struct {
+		Event struct {
+			ID string `json:"id"`
+		} `json:"event"`
+	}
+	if err := json.Unmarshal(body, &createEvent); err != nil {
+		return err
+	}
+	if strings.TrimSpace(createEvent.Event.ID) == "" {
+		return errors.New("event id missing for notifications smoke")
+	}
+
+	code, body, _, err = bobClient.PostJSON(ctx, "/social/events/"+createEvent.Event.ID+"/invite/"+alice.username, map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if cfg.NotificationOutboxDir != "" {
+		if err := waitForOutboxBody(cfg.NotificationOutboxDir, "social", alice.email, "Event invitation"); err != nil {
+			return err
+		}
+	}
+	if _, err := waitForUnreadCount(ctx, aliceClient, 2); err != nil {
+		return err
+	}
+	notifications, err = listNotifications(ctx, aliceClient)
+	if err != nil {
+		return err
+	}
+	hasInvite := false
+	for _, item := range notifications {
+		if item.Kind == "event_invite" {
+			hasInvite = true
+			break
+		}
+	}
+	if !hasInvite {
+		return fmt.Errorf("expected event_invite notification in inbox, got %#v", notifications)
+	}
+	page, err = listNotificationsPage(ctx, aliceClient, 1, 0)
+	if err != nil {
+		return err
+	}
+	if page.Total < 3 || page.UnreadCount < 2 || !page.HasMore || page.NextOffset == nil || len(page.Notifications) != 1 {
+		return fmt.Errorf("unexpected notification pagination payload after invite: %+v", page)
 	}
 
 	code, body, _, err = aliceClient.PostJSON(ctx, "/notifications/read-all", map[string]any{}, nil)
@@ -2262,11 +2347,14 @@ func waitForOutboxBody(dir, prefix, email, needle string) error {
 }
 
 type inboxNotification struct {
-	ID      string     `json:"id"`
-	Kind    string     `json:"kind"`
-	Subject string     `json:"subject"`
-	Body    string     `json:"body"`
-	ReadAt  *time.Time `json:"read_at,omitempty"`
+	ID        string     `json:"id"`
+	Kind      string     `json:"kind"`
+	KindLabel string     `json:"kind_label"`
+	KindGroup string     `json:"kind_group"`
+	Subject   string     `json:"subject"`
+	Body      string     `json:"body"`
+	ReadAt    *time.Time `json:"read_at,omitempty"`
+	IsRead    bool       `json:"is_read"`
 }
 
 func waitForUnreadCount(ctx context.Context, c *client.Client, wantAtLeast int) (int, error) {
@@ -2302,20 +2390,36 @@ func unreadCount(ctx context.Context, c *client.Client) (int, error) {
 }
 
 func listNotifications(ctx context.Context, c *client.Client) ([]inboxNotification, error) {
-	code, body, _, err := c.Get(ctx, "/notifications?limit=20&offset=0", nil)
+	page, err := listNotificationsPage(ctx, c, 20, 0)
 	if err != nil {
 		return nil, err
 	}
+	return page.Notifications, nil
+}
+
+type inboxNotificationPage struct {
+	Notifications []inboxNotification `json:"notifications"`
+	Total         int                 `json:"total"`
+	UnreadCount   int                 `json:"unread_count"`
+	Limit         int                 `json:"limit"`
+	Offset        int                 `json:"offset"`
+	HasMore       bool                `json:"has_more"`
+	NextOffset    *int                `json:"next_offset,omitempty"`
+}
+
+func listNotificationsPage(ctx context.Context, c *client.Client, limit, offset int) (inboxNotificationPage, error) {
+	code, body, _, err := c.Get(ctx, fmt.Sprintf("/notifications?limit=%d&offset=%d", limit, offset), nil)
+	if err != nil {
+		return inboxNotificationPage{}, err
+	}
 	if err := assert.Status(code, http.StatusOK, body); err != nil {
-		return nil, err
+		return inboxNotificationPage{}, err
 	}
-	var payload struct {
-		Notifications []inboxNotification `json:"notifications"`
-	}
+	var payload inboxNotificationPage
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
+		return inboxNotificationPage{}, err
 	}
-	return payload.Notifications, nil
+	return payload, nil
 }
 
 func sanitizeOutboxRecipient(email string) string {
