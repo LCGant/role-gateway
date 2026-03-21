@@ -453,8 +453,8 @@ func runPDPDecision(ctx context.Context, cfg Config, logger *slog.Logger) error 
 }
 
 func runSocialProfile(ctx context.Context, cfg Config, logger *slog.Logger) error {
-	if cfg.SocialInternalToken == "" {
-		return errors.New("SMOKE_SOCIAL_INTERNAL_TOKEN not set")
+	if cfg.SocialAuthzInternalToken == "" {
+		return errors.New("SMOKE_SOCIAL_AUTHZ_INTERNAL_TOKEN not set")
 	}
 
 	ownerClient, err := newClient(cfg)
@@ -533,7 +533,7 @@ func runSocialProfile(ctx context.Context, cfg Config, logger *slog.Logger) erro
 		return err
 	}
 
-	if err := assertViewerRelationship(ctx, socialInternal, cfg.SocialInternalToken, viewer.userID, owner.username, "viewer_follows"); err != nil {
+	if err := assertViewerRelationship(ctx, socialInternal, cfg.SocialAuthzInternalToken, viewer.userID, owner.username, "viewer_follows"); err != nil {
 		return err
 	}
 
@@ -572,7 +572,7 @@ func runSocialProfile(ctx context.Context, cfg Config, logger *slog.Logger) erro
 	if err := assert.Status(code, http.StatusOK, body); err != nil {
 		return err
 	}
-	if err := assertViewerRelationship(ctx, socialInternal, cfg.SocialInternalToken, viewer.userID, owner.username, "viewer_friend"); err != nil {
+	if err := assertViewerRelationship(ctx, socialInternal, cfg.SocialAuthzInternalToken, viewer.userID, owner.username, "viewer_friend"); err != nil {
 		return err
 	}
 
@@ -761,8 +761,8 @@ func runSocialFriends(ctx context.Context, cfg Config, logger *slog.Logger) erro
 }
 
 func runSocialPlaces(ctx context.Context, cfg Config, logger *slog.Logger) error {
-	if cfg.SocialInternalToken == "" {
-		return errors.New("SMOKE_SOCIAL_INTERNAL_TOKEN not set")
+	if cfg.SocialMediaInternalToken == "" {
+		return errors.New("SMOKE_SOCIAL_MEDIA_INTERNAL_TOKEN not set")
 	}
 
 	ownerClient, err := newClient(cfg)
@@ -904,7 +904,7 @@ func runSocialPlaces(ctx context.Context, cfg Config, logger *slog.Logger) error
 		"status":        "ready",
 		"media_url":     mediaBase + "/place-cover.jpg",
 		"thumbnail_url": mediaBase + "/place-cover-thumb.jpg",
-	}, map[string]string{"X-Internal-Token": cfg.SocialInternalToken})
+	}, map[string]string{"X-Internal-Token": cfg.SocialMediaInternalToken})
 	if err != nil {
 		return err
 	}
@@ -976,8 +976,8 @@ func runSocialPlaces(ctx context.Context, cfg Config, logger *slog.Logger) error
 }
 
 func runSocialPlaceFeed(ctx context.Context, cfg Config, logger *slog.Logger) error {
-	if cfg.SocialInternalToken == "" {
-		return errors.New("SMOKE_SOCIAL_INTERNAL_TOKEN not set")
+	if cfg.SocialMediaInternalToken == "" {
+		return errors.New("SMOKE_SOCIAL_MEDIA_INTERNAL_TOKEN not set")
 	}
 
 	viewerClient, err := newClient(cfg)
@@ -1099,7 +1099,7 @@ func runSocialPlaceFeed(ctx context.Context, cfg Config, logger *slog.Logger) er
 		"status":        "ready",
 		"media_url":     mediaBase + "/friends-feed-cover.jpg",
 		"thumbnail_url": mediaBase + "/friends-feed-cover-thumb.jpg",
-	}, map[string]string{"X-Internal-Token": cfg.SocialInternalToken})
+	}, map[string]string{"X-Internal-Token": cfg.SocialMediaInternalToken})
 	if err != nil {
 		return err
 	}
