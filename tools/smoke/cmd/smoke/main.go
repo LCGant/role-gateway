@@ -37,6 +37,7 @@ func main() {
 		flows.SocialMapScenario(),
 		flows.SocialPlaylistsScenario(),
 		flows.SocialEventsScenario(),
+		flows.NotificationsInboxScenario(),
 		flows.BodyLimitScenario(),
 	}
 

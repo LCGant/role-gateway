@@ -71,6 +71,10 @@ func SocialEventsScenario() Scenario {
 	return Scenario{Name: "social_events", Run: runSocialEvents}
 }
 
+func NotificationsInboxScenario() Scenario {
+	return Scenario{Name: "notifications_inbox", Run: runNotificationsInbox}
+}
+
 func BodyLimitScenario() Scenario {
 	return Scenario{Name: "payload_limit", Run: runBodyLimit}
 }
@@ -1880,6 +1884,151 @@ func runSocialEvents(ctx context.Context, cfg Config, logger *slog.Logger) error
 	return nil
 }
 
+func runNotificationsInbox(ctx context.Context, cfg Config, logger *slog.Logger) error {
+	aliceClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	bobClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+
+	alice, err := registerAndLogin(ctx, aliceClient, cfg)
+	if err != nil {
+		return err
+	}
+	bob, err := registerAndLogin(ctx, bobClient, cfg)
+	if err != nil {
+		return err
+	}
+
+	if err := ensurePublicProfile(ctx, aliceClient, alice, "Alice Inbox", "receiving notifications"); err != nil {
+		return err
+	}
+	if err := ensurePublicProfile(ctx, bobClient, bob, "Bob Inbox", "sending notifications"); err != nil {
+		return err
+	}
+
+	code, body, _, err := bobClient.PostJSON(ctx, "/social/profiles/"+alice.username+"/follow", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	if cfg.NotificationOutboxDir != "" {
+		if err := waitForOutboxBody(cfg.NotificationOutboxDir, "social", alice.email, "New follower"); err != nil {
+			return err
+		}
+	}
+
+	firstUnread, err := waitForUnreadCount(ctx, aliceClient, 1)
+	if err != nil {
+		return err
+	}
+	if firstUnread < 1 {
+		return fmt.Errorf("expected unread_count >= 1 after follow, got %d", firstUnread)
+	}
+
+	notifications, err := listNotifications(ctx, aliceClient)
+	if err != nil {
+		return err
+	}
+	followID := ""
+	for _, item := range notifications {
+		if item.Kind == "follow" {
+			followID = item.ID
+			break
+		}
+	}
+	if followID == "" {
+		return fmt.Errorf("expected follow notification in inbox, got %#v", notifications)
+	}
+
+	code, body, _, err = aliceClient.PostJSON(ctx, "/notifications/"+followID+"/read", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if _, err := waitForUnreadCount(ctx, aliceClient, 0); err != nil {
+		return err
+	}
+
+	code, body, _, err = aliceClient.PostJSON(ctx, "/social/posts", map[string]any{
+		"caption":    "alice notification post",
+		"visibility": "public",
+		"media": []map[string]any{{
+			"media_type": "image",
+			"media_url":  "https://cdn.example.com/alice-notification.jpg",
+		}},
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+	var createPost struct {
+		Post struct {
+			ID string `json:"id"`
+		} `json:"post"`
+	}
+	if err := json.Unmarshal(body, &createPost); err != nil {
+		return err
+	}
+	if createPost.Post.ID == "" {
+		return errors.New("post id missing for notifications smoke")
+	}
+
+	code, body, _, err = bobClient.PostJSON(ctx, "/social/posts/"+createPost.Post.ID+"/comments", map[string]any{"body": "great post"}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+
+	secondUnread, err := waitForUnreadCount(ctx, aliceClient, 1)
+	if err != nil {
+		return err
+	}
+	if secondUnread < 1 {
+		return fmt.Errorf("expected unread_count >= 1 after comment, got %d", secondUnread)
+	}
+
+	notifications, err = listNotifications(ctx, aliceClient)
+	if err != nil {
+		return err
+	}
+	hasComment := false
+	for _, item := range notifications {
+		if item.Kind == "post_comment" {
+			hasComment = true
+			break
+		}
+	}
+	if !hasComment {
+		return fmt.Errorf("expected post_comment notification in inbox, got %#v", notifications)
+	}
+
+	code, body, _, err = aliceClient.PostJSON(ctx, "/notifications/read-all", map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if _, err := waitForUnreadCount(ctx, aliceClient, 0); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func runBodyLimit(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	c, err := newClient(cfg)
 	if err != nil {
@@ -2085,6 +2234,88 @@ func waitForOutboxToken(dir, prefix, email string) (string, error) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return "", fmt.Errorf("token with prefix %s for %s not found in outbox %s", prefix, email, dir)
+}
+
+func waitForOutboxBody(dir, prefix, email, needle string) error {
+	want := sanitizeOutboxRecipient(email)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		entries, err := os.ReadDir(dir)
+		if err == nil {
+			for i := len(entries) - 1; i >= 0; i-- {
+				name := entries[i].Name()
+				if entries[i].IsDir() || !strings.HasPrefix(name, prefix) || !strings.Contains(name, want) {
+					continue
+				}
+				payload, err := os.ReadFile(filepath.Join(dir, name))
+				if err != nil {
+					continue
+				}
+				if strings.Contains(string(payload), needle) {
+					return nil
+				}
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("outbox body with prefix %s for %s did not contain %q", prefix, email, needle)
+}
+
+type inboxNotification struct {
+	ID      string     `json:"id"`
+	Kind    string     `json:"kind"`
+	Subject string     `json:"subject"`
+	Body    string     `json:"body"`
+	ReadAt  *time.Time `json:"read_at,omitempty"`
+}
+
+func waitForUnreadCount(ctx context.Context, c *client.Client, wantAtLeast int) (int, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		count, err := unreadCount(ctx, c)
+		if err == nil && wantAtLeast == 0 && count == 0 {
+			return 0, nil
+		}
+		if err == nil && wantAtLeast > 0 && count >= wantAtLeast {
+			return count, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return 0, fmt.Errorf("unread_count did not reach target %d", wantAtLeast)
+}
+
+func unreadCount(ctx context.Context, c *client.Client) (int, error) {
+	code, body, _, err := c.Get(ctx, "/notifications/unread-count", nil)
+	if err != nil {
+		return 0, err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return 0, err
+	}
+	var payload struct {
+		UnreadCount int `json:"unread_count"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return 0, err
+	}
+	return payload.UnreadCount, nil
+}
+
+func listNotifications(ctx context.Context, c *client.Client) ([]inboxNotification, error) {
+	code, body, _, err := c.Get(ctx, "/notifications?limit=20&offset=0", nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Notifications []inboxNotification `json:"notifications"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	return payload.Notifications, nil
 }
 
 func sanitizeOutboxRecipient(email string) string {
