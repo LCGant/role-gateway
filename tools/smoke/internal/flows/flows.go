@@ -1527,6 +1527,10 @@ func runSocialPlaylists(ctx context.Context, cfg Config, logger *slog.Logger) er
 	if err != nil {
 		return err
 	}
+	anonClient, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
 
 	owner, err := registerAndLogin(ctx, ownerClient, cfg)
 	if err != nil {
@@ -1545,6 +1549,72 @@ func runSocialPlaylists(ctx context.Context, cfg Config, logger *slog.Logger) er
 	}
 
 	code, body, _, err := ownerClient.PostJSON(ctx, "/social/playlists", map[string]any{
+		"title":      "Friends Alias Playlist",
+		"visibility": "friends",
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+	if !bytes.Contains(body, []byte(`"visibility":"friends_only"`)) {
+		return fmt.Errorf("expected friends alias to normalize to friends_only, got %s", string(body))
+	}
+
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/playlists", map[string]any{
+		"title":      "Link Playlist",
+		"visibility": "link",
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusCreated, body); err != nil {
+		return err
+	}
+	var linkResp struct {
+		Playlist struct {
+			ID string `json:"id"`
+		} `json:"playlist"`
+	}
+	if err := json.Unmarshal(body, &linkResp); err != nil {
+		return err
+	}
+	if linkResp.Playlist.ID == "" {
+		return errors.New("link playlist id missing")
+	}
+
+	code, body, _, err = anonClient.Get(ctx, "/social/playlists/"+linkResp.Playlist.ID, nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+
+	code, body, _, err = anonClient.Get(ctx, "/social/profiles/"+owner.username+"/playlists", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if responseContainsPlaylistID(body, linkResp.Playlist.ID) {
+		return fmt.Errorf("expected link playlist to stay hidden from public profile listing, got %s", string(body))
+	}
+
+	code, body, _, err = ownerClient.Get(ctx, "/social/profiles/"+owner.username+"/playlists", nil)
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return err
+	}
+	if !responseContainsPlaylistID(body, linkResp.Playlist.ID) {
+		return fmt.Errorf("expected owner profile listing to include link playlist %s, got %s", linkResp.Playlist.ID, string(body))
+	}
+
+	code, body, _, err = ownerClient.PostJSON(ctx, "/social/playlists", map[string]any{
 		"title":       "Smoke Playlist",
 		"description": "shared places for tonight",
 		"visibility":  "shared",
@@ -2075,6 +2145,27 @@ func responseContainsPlaceID(body []byte, placeID string) bool {
 			continue
 		}
 		if strings.TrimSpace(asString(entry["id"])) == placeID {
+			return true
+		}
+	}
+	return false
+}
+
+func responseContainsPlaylistID(body []byte, playlistID string) bool {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+	raw, ok := payload["playlists"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range raw {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(asString(entry["id"])) == playlistID {
 			return true
 		}
 	}
