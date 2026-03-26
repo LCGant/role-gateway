@@ -260,15 +260,17 @@ func runAuthMFA(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	}
 	hdr = map[string]string{"X-CSRF-Token": csrfAfterSetup}
 	var setup struct {
-		Secret string `json:"secret"`
+		TOTPSetup struct {
+			Secret string `json:"secret"`
+		} `json:"totp_setup"`
 	}
 	if err := json.Unmarshal(body, &setup); err != nil {
 		return err
 	}
-	if setup.Secret == "" {
+	if setup.TOTPSetup.Secret == "" {
 		return errors.New("missing totp secret")
 	}
-	codeStr, err := totp.Code(setup.Secret, time.Now(), 30)
+	codeStr, err := totp.Code(setup.TOTPSetup.Secret, time.Now(), 30)
 	if err != nil {
 		return err
 	}
@@ -286,10 +288,12 @@ func runAuthMFA(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	}
 	hdr = map[string]string{"X-CSRF-Token": csrfAfterVerify}
 	var vr struct {
-		BackupCodes []string `json:"backup_codes"`
+		BackupCodes struct {
+			Codes []string `json:"codes"`
+		} `json:"backup_codes"`
 	}
 	_ = json.Unmarshal(body, &vr)
-	if len(vr.BackupCodes) == 0 {
+	if len(vr.BackupCodes.Codes) == 0 {
 		return errors.New("backup codes missing")
 	}
 	// logout
@@ -323,7 +327,7 @@ func runAuthMFA(ctx context.Context, cfg Config, logger *slog.Logger) error {
 		return err
 	}
 	// login with backup code
-	backup := vr.BackupCodes[0]
+	backup := vr.BackupCodes.Codes[0]
 	backupBody := map[string]string{"identifier": ac.email, "password": ac.password, "backup_code": backup}
 	code, _, _, err = c.PostJSON(ctx, "/auth/login", backupBody, nil)
 	if err != nil {
@@ -2211,12 +2215,14 @@ func registerAndLogin(ctx context.Context, c *client.Client, cfg Config) (*authC
 		return nil, fmt.Errorf("login rate limited after retries")
 	}
 	var loginResp struct {
-		CSRFToken string `json:"csrf_token"`
+		Login struct {
+			CSRFToken string `json:"csrf_token"`
+		} `json:"login"`
 	}
 	_ = json.Unmarshal(body, &loginResp)
 	csrf := cookieValue(c, cfg, "csrf_token")
 	if csrf == "" {
-		csrf = strings.TrimSpace(loginResp.CSRFToken)
+		csrf = strings.TrimSpace(loginResp.Login.CSRFToken)
 	}
 	if csrf == "" {
 		return nil, errors.New("csrf token missing from cookie and body")
