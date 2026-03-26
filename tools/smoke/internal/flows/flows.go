@@ -2229,7 +2229,7 @@ func registerAndLogin(ctx context.Context, c *client.Client, cfg Config) (*authC
 	if deviceToken == "" {
 		return nil, errors.New("device cookie missing")
 	}
-	// fetch /me for ids
+	// fetch /me for public identity and envelope validation
 	code, body, _, err = c.Get(ctx, "/auth/me", nil)
 	if err != nil {
 		return nil, err
@@ -2238,15 +2238,56 @@ func registerAndLogin(ctx context.Context, c *client.Client, cfg Config) (*authC
 		return nil, err
 	}
 	var me struct {
-		ID       json.Number `json:"id"`
-		Email    string      `json:"email"`
-		Username string      `json:"username"`
-		TenantID string      `json:"tenant_id"`
+		User struct {
+			ID       string `json:"id"`
+			Email    string `json:"email"`
+			Username string `json:"username"`
+		} `json:"user"`
 	}
 	_ = json.Unmarshal(body, &me)
-	idStr := me.ID.String()
-	if idStr == "" || idStr == "0" {
+	if strings.TrimSpace(me.User.ID) == "" {
 		return nil, errors.New("user id missing from /me")
+	}
+
+	idStr := ""
+	tenantID := ""
+	if cfg.AuthInternalToken != "" {
+		authClient, err := newAuthInternalClient(cfg)
+		if err != nil {
+			return nil, err
+		}
+		code, body, _, err = authClient.PostJSON(ctx, "/internal/sessions/introspect", map[string]any{}, map[string]string{
+			"X-Internal-Token": cfg.AuthInternalToken,
+			"X-Session-Token":  sess,
+			"X-Device-Token":   deviceToken,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := assert.Status(code, http.StatusOK, body); err != nil {
+			return nil, err
+		}
+		var intro struct {
+			Active  bool `json:"active"`
+			Subject struct {
+				UserID   json.Number `json:"user_id"`
+				TenantID string      `json:"tenant_id"`
+			} `json:"subject"`
+		}
+		if err := json.Unmarshal(body, &intro); err != nil {
+			return nil, err
+		}
+		if !intro.Active {
+			return nil, errors.New("inactive session from auth introspect")
+		}
+		idStr = strings.TrimSpace(intro.Subject.UserID.String())
+		tenantID = strings.TrimSpace(intro.Subject.TenantID)
+	}
+	if idStr == "" || idStr == "0" {
+		idStr = strings.TrimSpace(me.User.ID)
+	}
+	if tenantID == "" {
+		tenantID = "default"
 	}
 	return &authContext{
 		email:        email,
@@ -2256,7 +2297,7 @@ func registerAndLogin(ctx context.Context, c *client.Client, cfg Config) (*authC
 		sessionToken: sess,
 		deviceToken:  deviceToken,
 		userID:       idStr,
-		tenantID:     coalesce(me.TenantID, "default"),
+		tenantID:     tenantID,
 	}, nil
 }
 
