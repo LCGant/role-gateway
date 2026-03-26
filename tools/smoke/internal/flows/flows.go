@@ -2318,12 +2318,15 @@ func patchJSON(ctx context.Context, c *client.Client, path string, payload any) 
 }
 
 func assertViewerRelationship(ctx context.Context, c *client.Client, internalToken, viewerUserID, viewerTenantID, username, field string) error {
-	code, body, _, err := c.Get(ctx, "/internal/profiles/"+username+"/authz-context", map[string]string{
+	code, body, _, err := c.PostJSON(ctx, "/internal/profiles/"+username+"/authz-context", map[string]any{
+		"viewer": map[string]any{
+			"user_id":    viewerUserID,
+			"tenant_id":  viewerTenantID,
+			"actor_id":   viewerUserID,
+			"actor_type": "person",
+		},
+	}, map[string]string{
 		"X-Internal-Token": internalToken,
-		"X-User-Id":        viewerUserID,
-		"X-Actor-Id":       viewerUserID,
-		"X-Actor-Type":     "person",
-		"X-Tenant-Id":      viewerTenantID,
 	})
 	if err != nil {
 		return err

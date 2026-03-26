@@ -33,6 +33,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("GATEWAY_BREAKER_HALFOPEN", "")
 	t.Setenv("GATEWAY_CSP", "")
 	t.Setenv("GATEWAY_ALLOW_INSECURE_UPSTREAMS", "true")
+	t.Setenv("GATEWAY_ALLOW_PLAINTEXT_HTTP", "true")
 
 	cfg, err := Load()
 	if err != nil {
@@ -42,7 +43,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("Validate returned error: %v", err)
 	}
 
-	if cfg.HTTPAddr != ":8080" || cfg.AuthUpstream != "http://auth:8080" || cfg.PDPUpstream != "http://pdp:8080" || cfg.SocialUpstream != "http://social:8080" {
+	if cfg.HTTPAddr != ":8080" || cfg.AuthUpstream != "https://auth.internal" || cfg.PDPUpstream != "https://pdp.internal" || cfg.SocialUpstream != "https://social.internal" {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 	if cfg.MaxBodyBytes != 1048576 || cfg.MaxHeaderBytes != 64*1024 || cfg.RateLimitBurst != 100 || cfg.RateLimitRPS != 50 || cfg.LoginRateLimitRPS != 15 || cfg.LoginRateLimitBurst != 30 || cfg.RateLimitMaxKeys != 10000 {
@@ -85,6 +86,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("GATEWAY_BREAKER_HALFOPEN", "3")
 	t.Setenv("GATEWAY_CSP", "default-src 'self'")
 	t.Setenv("GATEWAY_ALLOW_INSECURE_UPSTREAMS", "true")
+	t.Setenv("GATEWAY_ALLOW_PLAINTEXT_HTTP", "true")
 
 	cfg, err := Load()
 	if err != nil {
@@ -125,7 +127,9 @@ func TestLoadInvalid(t *testing.T) {
 
 func TestValidateRejectsHTTPUpstreamsByDefault(t *testing.T) {
 	cfg := defaults()
+	cfg.AuthUpstream = "http://auth.internal"
 	cfg.AllowInsecureUpstreams = false
+	cfg.AllowPlaintextHTTP = true
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected validation error for http upstreams when insecure flag is disabled")
 	}
@@ -135,8 +139,17 @@ func TestValidateRejectsMissingAllowedHosts(t *testing.T) {
 	cfg := defaults()
 	cfg.AllowedHosts = nil
 	cfg.AllowInsecureUpstreams = true
+	cfg.AllowPlaintextHTTP = true
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected validation error when allowed hosts are missing")
+	}
+}
+
+func TestValidateRejectsPlainHTTPGatewayWithoutOptIn(t *testing.T) {
+	cfg := defaults()
+	cfg.AllowPlaintextHTTP = false
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error when gateway plaintext http is not explicitly allowed")
 	}
 }
 

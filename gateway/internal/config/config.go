@@ -43,6 +43,7 @@ type Config struct {
 	HSTSIncludeSubdomains  bool
 	StrictJSON             bool
 	AllowInsecureUpstreams bool
+	AllowPlaintextHTTP     bool
 	TLSCertFile            string
 	TLSKeyFile             string
 }
@@ -187,6 +188,10 @@ func Load() (Config, error) {
 			return nil
 		},
 		func() (err error) {
+			cfg.AllowPlaintextHTTP = configx.Bool("GATEWAY_ALLOW_PLAINTEXT_HTTP", cfg.AllowPlaintextHTTP)
+			return nil
+		},
+		func() (err error) {
 			cfg.TLSCertFile = configx.String("GATEWAY_TLS_CERT_FILE", cfg.TLSCertFile)
 			return nil
 		},
@@ -272,6 +277,9 @@ func (c Config) Validate() error {
 	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
 		return errors.New("GATEWAY_TLS_CERT_FILE and GATEWAY_TLS_KEY_FILE must be set together")
 	}
+	if c.TLSCertFile == "" && c.TLSKeyFile == "" && !c.AllowPlaintextHTTP {
+		return errors.New("gateway requires TLS or explicit GATEWAY_ALLOW_PLAINTEXT_HTTP=true")
+	}
 	if c.BreakerEnabled {
 		if err := configx.RequirePositive("GATEWAY_BREAKER_FAILURES", int64(c.BreakerFailures)); err != nil {
 			return err
@@ -291,10 +299,10 @@ func defaults() Config {
 	return Config{
 		HTTPAddr:               ":8080",
 		HTTPSAddr:              ":8443",
-		AuthUpstream:           "http://auth:8080",
-		PDPUpstream:            "http://pdp:8080",
-		SocialUpstream:         "http://social:8080",
-		NotificationUpstream:   "http://notification:8080",
+		AuthUpstream:           "https://auth.internal",
+		PDPUpstream:            "https://pdp.internal",
+		SocialUpstream:         "https://social.internal",
+		NotificationUpstream:   "https://notification.internal",
 		ReadHeaderTimeout:      5 * time.Second,
 		ReadTimeout:            15 * time.Second,
 		WriteTimeout:           15 * time.Second,
@@ -322,6 +330,7 @@ func defaults() Config {
 		HSTSIncludeSubdomains:  true,
 		StrictJSON:             false,
 		AllowInsecureUpstreams: false,
+		AllowPlaintextHTTP:     false,
 		TLSCertFile:            "",
 		TLSKeyFile:             "",
 	}
