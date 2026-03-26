@@ -24,6 +24,14 @@ The gateway is not a second auth service and it is not the place for business au
 - security headers via shared middleware
 - public route surface kept intentionally narrow
 
+## Production TLS
+
+- production traffic must reach the public edge over TLS
+- the gateway supports direct TLS with `GATEWAY_TLS_CERT_FILE` and `GATEWAY_TLS_KEY_FILE`
+- plaintext HTTP is only allowed with explicit `GATEWAY_ALLOW_PLAINTEXT_HTTP=true`
+- when TLS is terminated by a reverse proxy or load balancer, keep plaintext disabled unless the internal hop is an intentional dev-only exception
+- enable HSTS only after HTTPS is confirmed at the public edge
+
 ## Status
 
 This component is usable and security-focused. It is still a starting point, not a finished edge platform. Teams adopting it should expect to refine observability, operational controls, and deployment-specific proxy/TLS behavior.

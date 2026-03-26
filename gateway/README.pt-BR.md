@@ -24,6 +24,14 @@ O gateway nao e um segundo servico de autenticacao e nao deve carregar regra de 
 - headers de seguranca via middleware compartilhado
 - superficie publica intencionalmente curta
 
+## TLS em producao
+
+- em producao, o trafego publico deve chegar a borda por TLS
+- o gateway suporta TLS direto via `GATEWAY_TLS_CERT_FILE` e `GATEWAY_TLS_KEY_FILE`
+- HTTP puro so e permitido com `GATEWAY_ALLOW_PLAINTEXT_HTTP=true` de forma explicita
+- quando o TLS for terminado por proxy reverso ou load balancer, mantenha o modo plaintext desabilitado salvo excecao dev controlada
+- habilite HSTS apenas depois de confirmar HTTPS na borda publica
+
 ## Estado atual
 
 Este componente ja e utilizavel e foi desenhado com foco em seguranca. Ainda assim, ele deve ser visto como ponto de partida e nao como edge platform final. Quem adotar precisa complementar observabilidade, controles operacionais e detalhes de proxy/TLS do ambiente real.
