@@ -30,7 +30,7 @@ type Config struct {
 
 func LoadConfig() Config {
 	base := getenv("SMOKE_BASE_URL", "http://gateway:8080")
-	authBase := getenv("SMOKE_AUTH_BASE_URL", "http://auth:8080")
+	authBase := getenv("SMOKE_AUTH_BASE_URL", "http://auth:8081")
 	pdpBase := getenv("SMOKE_PDP_BASE_URL", "http://pdp:8080")
 	socialBase := getenv("SMOKE_SOCIAL_BASE_URL", "http://social:8080")
 	timeout := parseDuration(getenv("SMOKE_TIMEOUT", "180s"), 180*time.Second)

@@ -20,6 +20,8 @@ func SetForwardHeaders(r *http.Request, trustedCIDRs ...*net.IPNet) {
 	priorXFF := r.Header.Get("X-Forwarded-For")
 	priorXFP := r.Header.Get("X-Forwarded-Proto")
 
+	stripInternalHeaders(r.Header)
+
 	r.Header.Del("X-Forwarded-For")
 	r.Header.Del("X-Forwarded-Proto")
 
@@ -46,8 +48,24 @@ func SetForwardHeaders(r *http.Request, trustedCIDRs ...*net.IPNet) {
 	}
 
 requestID:
-	if rid := r.Header.Get("X-Request-Id"); rid == "" {
+	if rid := SanitizeRequestID(r.Header.Get("X-Request-Id")); rid == "" {
 		r.Header.Set("X-Request-Id", newRequestID())
+	} else {
+		r.Header.Set("X-Request-Id", rid)
+	}
+}
+
+func stripInternalHeaders(h http.Header) {
+	for _, name := range []string{
+		"X-Internal-Token",
+		"X-Admin-Token",
+		"X-Metrics-Token",
+		"X-Actor-Id",
+		"X-Actor-Type",
+		"X-Tenant-Id",
+		"X-User-Id",
+	} {
+		h.Del(name)
 	}
 }
 

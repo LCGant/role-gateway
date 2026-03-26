@@ -70,8 +70,17 @@ func main() {
 	defer stop()
 
 	go func() {
-		logger.Info("gateway_listen", slog.String("addr", cfg.HTTPAddr))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		listenAddr := cfg.HTTPAddr
+		serve := srv.ListenAndServe
+		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+			if cfg.HTTPSAddr != "" {
+				srv.Addr = cfg.HTTPSAddr
+				listenAddr = cfg.HTTPSAddr
+			}
+			serve = func() error { return srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile) }
+		}
+		logger.Info("gateway_listen", slog.String("addr", listenAddr))
+		if err := serve(); err != nil && err != http.ErrServerClosed {
 			logger.Error("server_failed", slog.String("error", err.Error()))
 			stop()
 		}

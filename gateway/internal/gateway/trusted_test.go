@@ -41,6 +41,13 @@ func TestHostAllowedInvalidRulesFailClosedWhenNoValidHosts(t *testing.T) {
 	}
 }
 
+func TestHostAllowedFailsClosedWhenHostsUnset(t *testing.T) {
+	setAllowedHosts(nil)
+	if hostAllowed("api.example.com") {
+		t.Fatalf("expected fail-closed when no allowed hosts are configured")
+	}
+}
+
 func TestHostAllowedIgnoresInvalidWhenValidRuleExists(t *testing.T) {
 	setAllowedHosts([]string{"[]:443", "api.example.com"})
 	if !hostAllowed("api.example.com:443") {

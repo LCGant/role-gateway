@@ -26,6 +26,7 @@ func testConfig(authURL, pdpURL, socialURL, notificationURL string) config.Confi
 		PDPUpstream:          pdpURL,
 		SocialUpstream:       socialURL,
 		NotificationUpstream: notificationURL,
+		AllowedHosts:         []string{"example.com", "localhost", "127.0.0.1"},
 		ReadHeaderTimeout:    5 * time.Second,
 		ReadTimeout:          15 * time.Second,
 		WriteTimeout:         15 * time.Second,
@@ -66,6 +67,35 @@ func TestAuthPrefixRewrite(t *testing.T) {
 
 	if receivedPath != "/hello" {
 		t.Fatalf("expected upstream path /hello, got %s", receivedPath)
+	}
+}
+
+func TestAuthPrefixRewriteSanitizesRequestID(t *testing.T) {
+	var receivedRequestID string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedRequestID = r.Header.Get("X-Request-Id")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL, upstream.URL)
+	h, err := NewHandler(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("NewHandler error: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/auth/hello", nil)
+	req.Header.Set("X-Request-Id", "bad\r\nvalue")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+
+	if receivedRequestID == "" || strings.ContainsAny(receivedRequestID, "\r\n") {
+		t.Fatalf("expected sanitized request id upstream, got %q", receivedRequestID)
+	}
+	if receivedRequestID == "bad\r\nvalue" {
+		t.Fatalf("expected invalid request id to be replaced")
 	}
 }
 
@@ -464,6 +494,68 @@ func TestRateLimit(t *testing.T) {
 	h.ServeHTTP(rr2, req2)
 	if rr2.Code != http.StatusTooManyRequests {
 		t.Fatalf("second rapid request should be rate limited, got %d", rr2.Code)
+	}
+}
+
+func TestRateLimitAggregatesByClientIPAcrossPrefixes(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL, upstream.URL)
+	cfg.RateLimitRPS = 1
+	cfg.RateLimitBurst = 1
+
+	h, err := NewHandler(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("NewHandler error: %v", err)
+	}
+
+	req1 := httptest.NewRequest(http.MethodGet, "/auth/a", nil)
+	req1.RemoteAddr = "10.0.0.2:1234"
+	rr1 := httptest.NewRecorder()
+	h.ServeHTTP(rr1, req1)
+	if rr1.Code != http.StatusOK {
+		t.Fatalf("first request should pass, got %d", rr1.Code)
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/social/profiles/alice", nil)
+	req2.RemoteAddr = "10.0.0.2:4321"
+	rr2 := httptest.NewRecorder()
+	h.ServeHTTP(rr2, req2)
+	if rr2.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected shared IP rate limit across prefixes, got %d", rr2.Code)
+	}
+}
+
+func TestGatewayStripsInternalHeadersBeforeProxy(t *testing.T) {
+	var gotInternalToken string
+	var gotActorID string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotInternalToken = r.Header.Get("X-Internal-Token")
+		gotActorID = r.Header.Get("X-Actor-Id")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL, upstream.URL)
+	h, err := NewHandler(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("NewHandler error: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	req.Header.Set("X-Internal-Token", "client-forged")
+	req.Header.Set("X-Actor-Id", "forged-actor")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if gotInternalToken != "" || gotActorID != "" {
+		t.Fatalf("expected internal headers to be stripped, got token=%q actor=%q", gotInternalToken, gotActorID)
 	}
 }
 

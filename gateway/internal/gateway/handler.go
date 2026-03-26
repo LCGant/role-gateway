@@ -327,7 +327,7 @@ func (h *Handler) allowRequest(r *http.Request, prefix string) bool {
 	if h.limiter == nil {
 		return true
 	}
-	key := clientIP(r) + "|" + prefix
+	key := clientIP(r)
 	return h.limiter.Allow(key, time.Now())
 }
 
@@ -401,7 +401,8 @@ func extractRequestID(r *http.Request) string {
 	if rid, ok := httpx.RequestIDFromContext(r.Context()); ok && rid != "" {
 		return rid
 	}
-	if rid := r.Header.Get("X-Request-Id"); rid != "" {
+	if rid := httpx.SanitizeRequestID(r.Header.Get("X-Request-Id")); rid != "" {
+		r.Header.Set("X-Request-Id", rid)
 		return rid
 	}
 	rid := generateRequestID()
@@ -413,7 +414,7 @@ func requestIDForLog(r *http.Request) string {
 	if rid, ok := httpx.RequestIDFromContext(r.Context()); ok && rid != "" {
 		return rid
 	}
-	if rid := r.Header.Get("X-Request-Id"); rid != "" {
+	if rid := httpx.SanitizeRequestID(r.Header.Get("X-Request-Id")); rid != "" {
 		return rid
 	}
 	return ""

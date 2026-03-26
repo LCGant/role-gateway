@@ -26,6 +26,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("GATEWAY_ENABLE_PDP_ADMIN", "")
 	t.Setenv("GATEWAY_RATE_LIMIT_RPS", "")
 	t.Setenv("GATEWAY_TRUSTED_CIDRS", "")
+	t.Setenv("GATEWAY_ALLOWED_HOSTS", "")
 	t.Setenv("GATEWAY_BREAKER_ENABLED", "")
 	t.Setenv("GATEWAY_BREAKER_FAILURES", "")
 	t.Setenv("GATEWAY_BREAKER_RESET", "")
@@ -53,6 +54,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.BreakerEnabled || cfg.BreakerFailures != 5 || cfg.BreakerHalfOpen != 1 || cfg.BreakerReset != 30*time.Second || cfg.CSP != "" {
 		t.Fatalf("breaker defaults wrong: %+v", cfg)
 	}
+	if len(cfg.AllowedHosts) != 2 || cfg.HSTSMaxAge != 31536000 || !cfg.HSTSIncludeSubdomains {
+		t.Fatalf("secure defaults wrong: %+v", cfg)
+	}
 }
 
 // TestLoadOverrides verifies that environment variable overrides are applied correctly.
@@ -74,6 +78,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("GATEWAY_RATE_LIMIT_MAX_KEYS", "1234")
 	t.Setenv("GATEWAY_ENABLE_PDP_ADMIN", "true")
 	t.Setenv("GATEWAY_TRUSTED_CIDRS", "10.0.0.0/24,192.168.0.0/24")
+	t.Setenv("GATEWAY_ALLOWED_HOSTS", "api.example.com,example.com")
 	t.Setenv("GATEWAY_BREAKER_ENABLED", "true")
 	t.Setenv("GATEWAY_BREAKER_FAILURES", "2")
 	t.Setenv("GATEWAY_BREAKER_RESET", "45s")
@@ -101,6 +106,9 @@ func TestLoadOverrides(t *testing.T) {
 	if len(cfg.TrustedCIDRs) != 2 || cfg.TrustedCIDRs[0] != "10.0.0.0/24" {
 		t.Fatalf("trusted cidrs not parsed: %+v", cfg.TrustedCIDRs)
 	}
+	if len(cfg.AllowedHosts) != 2 || cfg.AllowedHosts[0] != "api.example.com" {
+		t.Fatalf("allowed hosts not parsed: %+v", cfg.AllowedHosts)
+	}
 	if !cfg.BreakerEnabled || cfg.BreakerFailures != 2 || cfg.BreakerHalfOpen != 3 || cfg.BreakerReset != 45*time.Second || cfg.CSP != "default-src 'self'" {
 		t.Fatalf("breaker overrides wrong: %+v", cfg)
 	}
@@ -120,6 +128,15 @@ func TestValidateRejectsHTTPUpstreamsByDefault(t *testing.T) {
 	cfg.AllowInsecureUpstreams = false
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected validation error for http upstreams when insecure flag is disabled")
+	}
+}
+
+func TestValidateRejectsMissingAllowedHosts(t *testing.T) {
+	cfg := defaults()
+	cfg.AllowedHosts = nil
+	cfg.AllowInsecureUpstreams = true
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error when allowed hosts are missing")
 	}
 }
 

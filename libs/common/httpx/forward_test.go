@@ -70,3 +70,19 @@ func TestSetForwardHeadersTrustedPreservesChain(t *testing.T) {
 		t.Fatalf("trusted should preserve proto, got %s", got)
 	}
 }
+
+func TestSetForwardHeadersStripsInternalHeaders(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	r.RemoteAddr = "192.0.2.1:12345"
+	r.Header.Set("X-Internal-Token", "forged")
+	r.Header.Set("X-Actor-Id", "actor")
+
+	SetForwardHeaders(r)
+
+	if got := r.Header.Get("X-Internal-Token"); got != "" {
+		t.Fatalf("expected X-Internal-Token stripped, got %q", got)
+	}
+	if got := r.Header.Get("X-Actor-Id"); got != "" {
+		t.Fatalf("expected X-Actor-Id stripped, got %q", got)
+	}
+}

@@ -3,6 +3,7 @@ package httpx
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -38,5 +39,25 @@ func TestRequestIDPreserves(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	if rr.Header().Get("X-Request-Id") != "abc" {
 		t.Fatalf("expected header preserved")
+	}
+}
+
+func TestRequestIDSanitizesInvalidHeader(t *testing.T) {
+	h := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rid, _ := RequestIDFromContext(r.Context())
+		if rid == "" {
+			t.Fatalf("expected request id in context")
+		}
+		if strings.ContainsAny(rid, "\r\n") {
+			t.Fatalf("expected sanitized request id, got %q", rid)
+		}
+	}))
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Request-Id", "bad\r\nvalue")
+	h.ServeHTTP(rr, req)
+	if got := rr.Header().Get("X-Request-Id"); got == "" || got == "bad\r\nvalue" {
+		t.Fatalf("expected invalid request id to be replaced, got %q", got)
 	}
 }

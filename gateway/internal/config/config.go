@@ -11,6 +11,7 @@ import (
 // Config aggregates runtime settings for the gateway.
 type Config struct {
 	HTTPAddr               string
+	HTTPSAddr              string
 	AuthUpstream           string
 	PDPUpstream            string
 	SocialUpstream         string
@@ -42,12 +43,15 @@ type Config struct {
 	HSTSIncludeSubdomains  bool
 	StrictJSON             bool
 	AllowInsecureUpstreams bool
+	TLSCertFile            string
+	TLSKeyFile             string
 }
 
 // Load reads environment variables and returns a Config with defaults applied.
 func Load() (Config, error) {
 	cfg := defaults()
 	cfg.HTTPAddr = configx.String("GATEWAY_HTTP_ADDR", cfg.HTTPAddr)
+	cfg.HTTPSAddr = configx.String("GATEWAY_HTTPS_ADDR", cfg.HTTPSAddr)
 
 	err := configx.LoadAll(
 		func() (err error) {
@@ -182,6 +186,14 @@ func Load() (Config, error) {
 			cfg.AllowInsecureUpstreams = configx.Bool("GATEWAY_ALLOW_INSECURE_UPSTREAMS", cfg.AllowInsecureUpstreams)
 			return nil
 		},
+		func() (err error) {
+			cfg.TLSCertFile = configx.String("GATEWAY_TLS_CERT_FILE", cfg.TLSCertFile)
+			return nil
+		},
+		func() (err error) {
+			cfg.TLSKeyFile = configx.String("GATEWAY_TLS_KEY_FILE", cfg.TLSKeyFile)
+			return nil
+		},
 	)
 	if err != nil {
 		return Config{}, err
@@ -196,6 +208,9 @@ func Load() (Config, error) {
 func (c Config) Validate() error {
 	if err := configx.RequireNonEmpty("GATEWAY_HTTP_ADDR", c.HTTPAddr); err != nil {
 		return err
+	}
+	if len(c.AllowedHosts) == 0 {
+		return errors.New("GATEWAY_ALLOWED_HOSTS is required")
 	}
 	if err := configx.RequireNonEmpty("AUTH_UPSTREAM", c.AuthUpstream); err != nil {
 		return err
@@ -254,6 +269,9 @@ func (c Config) Validate() error {
 	if c.HSTSMaxAge < 0 {
 		return errors.New("GATEWAY_HSTS_MAX_AGE must be non-negative")
 	}
+	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
+		return errors.New("GATEWAY_TLS_CERT_FILE and GATEWAY_TLS_KEY_FILE must be set together")
+	}
 	if c.BreakerEnabled {
 		if err := configx.RequirePositive("GATEWAY_BREAKER_FAILURES", int64(c.BreakerFailures)); err != nil {
 			return err
@@ -272,6 +290,7 @@ func (c Config) Validate() error {
 func defaults() Config {
 	return Config{
 		HTTPAddr:               ":8080",
+		HTTPSAddr:              ":8443",
 		AuthUpstream:           "http://auth:8080",
 		PDPUpstream:            "http://pdp:8080",
 		SocialUpstream:         "http://social:8080",
@@ -289,7 +308,7 @@ func defaults() Config {
 		RateLimitMaxKeys:       10000,
 		EnablePDPAdmin:         false,
 		TrustedCIDRs:           nil,
-		AllowedHosts:           nil,
+		AllowedHosts:           []string{"localhost", "127.0.0.1"},
 		LogDevEnabled:          false,
 		BreakerEnabled:         false,
 		BreakerFailures:        5,
@@ -299,10 +318,12 @@ func defaults() Config {
 		UpstreamRootCA:         "",
 		UpstreamClientCert:     "",
 		UpstreamClientKey:      "",
-		HSTSMaxAge:             0,
-		HSTSIncludeSubdomains:  false,
+		HSTSMaxAge:             31536000,
+		HSTSIncludeSubdomains:  true,
 		StrictJSON:             false,
 		AllowInsecureUpstreams: false,
+		TLSCertFile:            "",
+		TLSKeyFile:             "",
 	}
 }
 

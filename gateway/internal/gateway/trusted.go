@@ -75,7 +75,7 @@ func setAllowedHosts(hosts []string) {
 
 func hostAllowed(host string) bool {
 	if len(allowedHosts) == 0 {
-		return !hostRulesBad
+		return false
 	}
 	reqHost, reqPort, reqHasPort, ok := splitHostPort(host)
 	if !ok {
