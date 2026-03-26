@@ -404,9 +404,22 @@ func runPDPDecision(ctx context.Context, cfg Config, logger *slog.Logger) error 
 		return errors.New("missing subject.auth_time from introspect")
 	}
 	logger.Info("pdp_subject", slog.String("user_id", userID), slog.String("tenant_id", tenantID))
-	// Positive path via ownership so the smoke does not depend on seeded RBAC.
-	subj := map[string]any{"user_id": userID, "tenant_id": tenantID, "aal": intro.Subject.AAL, "auth_time": authTime}
-	resource := map[string]any{"type": "demo", "tenant_id": tenantID, "id": "x", "owner_id": userID}
+	// Positive path via enriched ownership so the smoke does not depend on seeded RBAC
+	// or on the removed unsafe owner_id fallback.
+	subj := map[string]any{
+		"user_id":   userID,
+		"actor_id":  userID,
+		"tenant_id": tenantID,
+		"aal":       intro.Subject.AAL,
+		"auth_time": authTime,
+	}
+	resource := map[string]any{
+		"type":             "demo",
+		"tenant_id":        tenantID,
+		"id":               "x",
+		"owner_actor_id":   userID,
+		"owner_actor_type": "person",
+	}
 	payload := map[string]any{"subject": subj, "action": "demo:read", "resource": resource}
 	hdr = map[string]string{"X-Internal-Token": cfg.PDPInternalToken}
 	code, body, _, err = pdpClient.PostJSON(ctx, "/v1/decision", payload, hdr)
@@ -533,7 +546,7 @@ func runSocialProfile(ctx context.Context, cfg Config, logger *slog.Logger) erro
 		return err
 	}
 
-	if err := assertViewerRelationship(ctx, socialInternal, cfg.SocialAuthzInternalToken, viewer.userID, owner.username, "viewer_follows"); err != nil {
+	if err := assertViewerRelationship(ctx, socialInternal, cfg.SocialAuthzInternalToken, viewer.userID, viewer.tenantID, owner.username, "viewer_follows"); err != nil {
 		return err
 	}
 
@@ -572,7 +585,7 @@ func runSocialProfile(ctx context.Context, cfg Config, logger *slog.Logger) erro
 	if err := assert.Status(code, http.StatusOK, body); err != nil {
 		return err
 	}
-	if err := assertViewerRelationship(ctx, socialInternal, cfg.SocialAuthzInternalToken, viewer.userID, owner.username, "viewer_friend"); err != nil {
+	if err := assertViewerRelationship(ctx, socialInternal, cfg.SocialAuthzInternalToken, viewer.userID, viewer.tenantID, owner.username, "viewer_friend"); err != nil {
 		return err
 	}
 
@@ -2253,8 +2266,9 @@ func patchJSON(ctx context.Context, c *client.Client, path string, payload any) 
 		return err
 	}
 	code, respBody, _, err := c.Do(ctx, http.MethodPatch, path, body, map[string]string{
-		"Content-Type":    "application/json",
-		"X-Client-Family": "cli",
+		"Content-Type":     "application/json",
+		"X-Client-Family":  "cli",
+		"X-Requested-With": "cli",
 	})
 	if err != nil {
 		return err
@@ -2262,10 +2276,13 @@ func patchJSON(ctx context.Context, c *client.Client, path string, payload any) 
 	return assert.Status(code, http.StatusOK, respBody)
 }
 
-func assertViewerRelationship(ctx context.Context, c *client.Client, internalToken, viewerUserID, username, field string) error {
+func assertViewerRelationship(ctx context.Context, c *client.Client, internalToken, viewerUserID, viewerTenantID, username, field string) error {
 	code, body, _, err := c.Get(ctx, "/internal/profiles/"+username+"/authz-context", map[string]string{
 		"X-Internal-Token": internalToken,
 		"X-User-Id":        viewerUserID,
+		"X-Actor-Id":       viewerUserID,
+		"X-Actor-Type":     "person",
+		"X-Tenant-Id":      viewerTenantID,
 	})
 	if err != nil {
 		return err

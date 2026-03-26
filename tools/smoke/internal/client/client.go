@@ -71,6 +71,9 @@ func (c *Client) PostJSON(ctx context.Context, path string, payload any, headers
 	if _, ok := headers["X-Client-Family"]; !ok {
 		headers["X-Client-Family"] = "cli"
 	}
+	if _, ok := headers["X-Requested-With"]; !ok {
+		headers["X-Requested-With"] = "cli"
+	}
 	return c.Do(ctx, http.MethodPost, path, body, headers)
 }
 
