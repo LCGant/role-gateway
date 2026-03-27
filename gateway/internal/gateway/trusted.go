@@ -11,9 +11,8 @@ import (
 )
 
 var (
-	trustedOnce  sync.Once
+	trustedMu    sync.RWMutex
 	trustedNets  []*net.IPNet
-	hostsOnce    sync.Once
 	allowedHosts []allowedHost
 	hostRulesBad bool
 )
@@ -25,55 +24,62 @@ type allowedHost struct {
 }
 
 func setTrustedCIDRs(cidrs []string, logger *slog.Logger) {
-	trustedOnce = sync.Once{}
-	trustedNets = nil
-	trustedOnce.Do(func() {
-		for _, c := range cidrs {
-			if c == "" {
-				continue
-			}
-			_, n, err := net.ParseCIDR(c)
-			if err != nil {
-				logger.Warn("trusted_cidr_parse_failed", slog.String("cidr", c), slog.String("error", err.Error()))
-				continue
-			}
-			trustedNets = append(trustedNets, n)
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		if c == "" {
+			continue
 		}
-	})
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			logger.Warn("trusted_cidr_parse_failed", slog.String("cidr", c), slog.String("error", err.Error()))
+			continue
+		}
+		nets = append(nets, n)
+	}
+	trustedMu.Lock()
+	trustedNets = nets
+	trustedMu.Unlock()
 }
 
 func parseTrustedCIDRs(logger *slog.Logger) []*net.IPNet {
+	trustedMu.RLock()
+	defer trustedMu.RUnlock()
 	return trustedNets
 }
 
 func trustedConfigured() bool {
+	trustedMu.RLock()
+	defer trustedMu.RUnlock()
 	return len(trustedNets) > 0
 }
 
 func setAllowedHosts(hosts []string) {
-	hostsOnce = sync.Once{}
-	allowedHosts = nil
-	hostRulesBad = false
-	hostsOnce.Do(func() {
-		for _, h := range hosts {
-			if h == "" {
-				continue
-			}
-			host, port, hasPort, ok := splitHostPort(strings.TrimSpace(h))
-			if !ok {
-				hostRulesBad = true
-				continue
-			}
-			allowedHosts = append(allowedHosts, allowedHost{
-				host:    host,
-				port:    port,
-				hasPort: hasPort,
-			})
+	parsed := make([]allowedHost, 0, len(hosts))
+	rulesBad := false
+	for _, h := range hosts {
+		if h == "" {
+			continue
 		}
-	})
+		host, port, hasPort, ok := splitHostPort(strings.TrimSpace(h))
+		if !ok {
+			rulesBad = true
+			continue
+		}
+		parsed = append(parsed, allowedHost{
+			host:    host,
+			port:    port,
+			hasPort: hasPort,
+		})
+	}
+	trustedMu.Lock()
+	allowedHosts = parsed
+	hostRulesBad = rulesBad
+	trustedMu.Unlock()
 }
 
 func hostAllowed(host string) bool {
+	trustedMu.RLock()
+	defer trustedMu.RUnlock()
 	if len(allowedHosts) == 0 {
 		return false
 	}
@@ -152,6 +158,8 @@ func isTrustedIP(ip net.IP) bool {
 	if ip == nil {
 		return false
 	}
+	trustedMu.RLock()
+	defer trustedMu.RUnlock()
 	for _, n := range trustedNets {
 		if n != nil && n.Contains(ip) {
 			return true
