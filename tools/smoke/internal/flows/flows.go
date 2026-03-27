@@ -470,8 +470,8 @@ func runPDPDecision(ctx context.Context, cfg Config, logger *slog.Logger) error 
 }
 
 func runSocialProfile(ctx context.Context, cfg Config, logger *slog.Logger) error {
-	if cfg.SocialAuthzInternalToken == "" && cfg.AuthPDPSocialAuthzMintToken == "" {
-		return errors.New("SMOKE_SOCIAL_AUTHZ_INTERNAL_TOKEN or SMOKE_AUTH_PDP_SOCIAL_AUTHZ_MINT_TOKEN not set")
+	if cfg.AuthPDPSocialAuthzMintToken == "" {
+		return errors.New("SMOKE_AUTH_PDP_SOCIAL_AUTHZ_MINT_TOKEN not set")
 	}
 
 	ownerClient, err := newClient(cfg)
@@ -2325,17 +2325,11 @@ func patchJSON(ctx context.Context, c *client.Client, path string, payload any) 
 
 func assertViewerRelationship(ctx context.Context, cfg Config, c *client.Client, viewerUserID, viewerTenantID, username, field string) error {
 	headers := map[string]string{}
-	if cfg.AuthPDPSocialAuthzMintToken != "" {
-		token, err := mintInternalServiceToken(ctx, cfg, "social", "social:authz:read", viewerTenantID, cfg.AuthPDPSocialAuthzMintToken)
-		if err != nil {
-			return err
-		}
-		headers["Authorization"] = "Bearer " + token
-	} else if cfg.SocialAuthzInternalToken != "" {
-		headers["X-Internal-Token"] = cfg.SocialAuthzInternalToken
-	} else {
-		return errors.New("missing internal authz credential")
+	token, err := mintInternalServiceToken(ctx, cfg, "social", "social:authz:read", viewerTenantID, cfg.AuthPDPSocialAuthzMintToken)
+	if err != nil {
+		return err
 	}
+	headers["Authorization"] = "Bearer " + token
 	code, body, _, err := c.PostJSON(ctx, "/internal/profiles/"+username+"/authz-context", map[string]any{
 		"viewer": map[string]any{
 			"user_id":   viewerUserID,
