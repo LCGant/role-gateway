@@ -153,6 +153,28 @@ func TestValidateRejectsPlainHTTPGatewayWithoutOptIn(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsEnabledRateLimitWithZeroBurst(t *testing.T) {
+	cfg := defaults()
+	cfg.AllowInsecureUpstreams = true
+	cfg.AllowPlaintextHTTP = true
+	cfg.RateLimitRPS = 10
+	cfg.RateLimitBurst = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error when gateway burst is zero with rate limiting enabled")
+	}
+}
+
+func TestValidateRejectsEnabledLoginRateLimitWithZeroBurst(t *testing.T) {
+	cfg := defaults()
+	cfg.AllowInsecureUpstreams = true
+	cfg.AllowPlaintextHTTP = true
+	cfg.LoginRateLimitRPS = 1
+	cfg.LoginRateLimitBurst = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error when login burst is zero with rate limiting enabled")
+	}
+}
+
 // Ensure env cleanup between tests.
 func TestMain(m *testing.M) {
 	code := m.Run()

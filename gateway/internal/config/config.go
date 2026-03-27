@@ -252,14 +252,20 @@ func (c Config) Validate() error {
 	if err := configx.RequireNonNegativeFloat("GATEWAY_RATE_LIMIT_RPS", c.RateLimitRPS); err != nil {
 		return err
 	}
-	if err := configx.RequireNonNegativeInt("GATEWAY_RATE_LIMIT_BURST", c.RateLimitBurst); err != nil {
-		return err
+	if c.RateLimitBurst < 0 {
+		return errors.New("GATEWAY_RATE_LIMIT_BURST must be non-negative")
+	}
+	if c.RateLimitRPS > 0 && c.RateLimitBurst <= 0 {
+		return errors.New("GATEWAY_RATE_LIMIT_BURST must be positive when GATEWAY_RATE_LIMIT_RPS is enabled")
 	}
 	if err := configx.RequireNonNegativeFloat("GATEWAY_LOGIN_RATE_LIMIT_RPS", c.LoginRateLimitRPS); err != nil {
 		return err
 	}
-	if err := configx.RequireNonNegativeInt("GATEWAY_LOGIN_RATE_LIMIT_BURST", c.LoginRateLimitBurst); err != nil {
-		return err
+	if c.LoginRateLimitBurst < 0 {
+		return errors.New("GATEWAY_LOGIN_RATE_LIMIT_BURST must be non-negative")
+	}
+	if c.LoginRateLimitRPS > 0 && c.LoginRateLimitBurst <= 0 {
+		return errors.New("GATEWAY_LOGIN_RATE_LIMIT_BURST must be positive when GATEWAY_LOGIN_RATE_LIMIT_RPS is enabled")
 	}
 	if err := configx.RequirePositive("GATEWAY_RATE_LIMIT_MAX_KEYS", int64(c.RateLimitMaxKeys)); err != nil {
 		return err

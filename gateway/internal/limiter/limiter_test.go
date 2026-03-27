@@ -8,6 +8,7 @@ import (
 // TestLimiterDisabled verifies that a limiter with 0 RPS allows all requests.
 func TestLimiterDisabled(t *testing.T) {
 	l := New(0, 1)
+	t.Cleanup(l.Close)
 	for i := 0; i < 5; i++ {
 		if !l.Allow("k", time.Now()) {
 			t.Fatalf("disabled limiter should allow all")
@@ -19,6 +20,7 @@ func TestLimiterDisabled(t *testing.T) {
 func TestLimiterTokenBucket(t *testing.T) {
 	now := time.Now()
 	l := New(1, 2)
+	t.Cleanup(l.Close)
 
 	if !l.Allow("k", now) {
 		t.Fatalf("first should pass")
@@ -40,6 +42,7 @@ func TestLimiterTokenBucket(t *testing.T) {
 func TestLimiterCleanup(t *testing.T) {
 	now := time.Now()
 	l := New(1, 1, WithTTL(time.Second), WithSweepEvery(time.Millisecond))
+	t.Cleanup(l.Close)
 	l.lastSweep = now
 
 	if !l.Allow("old", now) {
@@ -63,6 +66,7 @@ func TestLimiterCleanup(t *testing.T) {
 // TestLimiterMaxEntries verifies that the limiter evicts old buckets when maximum entries is reached.
 func TestLimiterMaxEntries(t *testing.T) {
 	l := New(1, 1, WithMaxEntries(1))
+	t.Cleanup(l.Close)
 	now := time.Now()
 
 	if !l.Allow("a", now) {
@@ -82,6 +86,7 @@ func TestLimiterMaxEntries(t *testing.T) {
 func TestLimiterNegativeBurstClampsToSingleToken(t *testing.T) {
 	now := time.Now()
 	l := New(1, -5)
+	t.Cleanup(l.Close)
 
 	if !l.Allow("k", now) {
 		t.Fatalf("first request should pass with clamped burst")
@@ -94,6 +99,7 @@ func TestLimiterNegativeBurstClampsToSingleToken(t *testing.T) {
 func TestLimiterSweepsExpiredEntriesWhenNewKeysArrive(t *testing.T) {
 	now := time.Now()
 	l := New(1, 1, WithTTL(time.Second), WithSweepEvery(time.Hour))
+	t.Cleanup(l.Close)
 	l.lastSweep = now
 
 	if !l.Allow("old", now) {
@@ -107,5 +113,23 @@ func TestLimiterSweepsExpiredEntriesWhenNewKeysArrive(t *testing.T) {
 	defer l.mu.Unlock()
 	if _, ok := l.bucket["old"]; ok {
 		t.Fatalf("expected expired key to be swept on new-key path")
+	}
+}
+
+func TestLimiterJanitorSweepsExpiredEntriesWithoutRequests(t *testing.T) {
+	l := New(1, 1, WithTTL(20*time.Millisecond), WithSweepEvery(10*time.Millisecond))
+	t.Cleanup(l.Close)
+	now := time.Now()
+
+	if !l.Allow("stale", now) {
+		t.Fatalf("initial allow failed")
+	}
+
+	time.Sleep(60 * time.Millisecond)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.bucket) != 0 {
+		t.Fatalf("expected janitor to sweep expired buckets, got %d", len(l.bucket))
 	}
 }

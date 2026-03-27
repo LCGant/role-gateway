@@ -15,6 +15,8 @@ type Limiter struct {
 	ttl        time.Duration
 	sweepEvery time.Duration
 	lastSweep  time.Time
+	stopCh     chan struct{}
+	stopOnce   sync.Once
 }
 
 type bucket struct {
@@ -65,11 +67,23 @@ func New(limit float64, burst int, opts ...Option) *Limiter {
 		sweepEvery: time.Minute,
 		maxEntries: 10000,
 		lastSweep:  time.Now(),
+		stopCh:     make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(l)
 	}
+	l.startJanitor()
 	return l
+}
+
+// Close stops the background cleanup loop.
+func (l *Limiter) Close() {
+	if l == nil {
+		return
+	}
+	l.stopOnce.Do(func() {
+		close(l.stopCh)
+	})
 }
 
 // Allow reports whether a request for the given key can proceed at time now.
@@ -145,4 +159,25 @@ func (l *Limiter) evictForNewKey(now time.Time) {
 		}
 		delete(l.bucket, oldestKey)
 	}
+}
+
+func (l *Limiter) startJanitor() {
+	if l == nil || l.sweepEvery <= 0 || l.ttl <= 0 {
+		return
+	}
+	ticker := time.NewTicker(l.sweepEvery)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				now := time.Now()
+				l.mu.Lock()
+				l.sweepExpired(now, true)
+				l.mu.Unlock()
+			case <-l.stopCh:
+				return
+			}
+		}
+	}()
 }
