@@ -38,6 +38,7 @@ func main() {
 		flows.SocialPlaylistsScenario(),
 		flows.SocialEventsScenario(),
 		flows.NotificationsInboxScenario(),
+		flows.InternalScopedTokensScenario(),
 		flows.BodyLimitScenario(),
 	}
 

@@ -75,6 +75,10 @@ func NotificationsInboxScenario() Scenario {
 	return Scenario{Name: "notifications_inbox", Run: runNotificationsInbox}
 }
 
+func InternalScopedTokensScenario() Scenario {
+	return Scenario{Name: "internal_scoped_tokens", Run: runInternalScopedTokens}
+}
+
 func BodyLimitScenario() Scenario {
 	return Scenario{Name: "payload_limit", Run: runBodyLimit}
 }
@@ -106,6 +110,10 @@ func newPDPInternalClient(cfg Config) (*client.Client, error) {
 
 func newSocialInternalClient(cfg Config) (*client.Client, error) {
 	return client.New(cfg.SocialBaseURL, 10*time.Second)
+}
+
+func newNotificationInternalClient(cfg Config) (*client.Client, error) {
+	return client.New(cfg.NotificationBaseURL, 10*time.Second)
 }
 
 func wait(ctx context.Context, dur time.Duration) error {
@@ -191,8 +199,8 @@ func runAuthBasic(ctx context.Context, cfg Config, logger *slog.Logger) error {
 }
 
 func runAuthIntrospect(ctx context.Context, cfg Config, logger *slog.Logger) error {
-	if cfg.AuthInternalToken == "" {
-		return errors.New("SMOKE_AUTH_INTERNAL_TOKEN not set")
+	if cfg.AuthNotificationMintToken == "" {
+		return errors.New("SMOKE_AUTH_NOTIFICATION_AUTH_MINT_TOKEN not set")
 	}
 	time.Sleep(6 * time.Second)
 	c, err := newClient(cfg)
@@ -207,16 +215,20 @@ func runAuthIntrospect(ctx context.Context, cfg Config, logger *slog.Logger) err
 	if err != nil {
 		return err
 	}
+	introspectToken, err := mintInternalServiceToken(ctx, cfg, "auth", "auth:sessions:introspect", "", cfg.AuthNotificationMintToken)
+	if err != nil {
+		return err
+	}
 	// refresh csrf in case it rotated
 	csrf := cookieValue(c, cfg, "csrf_token")
 	if csrf == "" {
 		return errors.New("csrf missing before introspect")
 	}
 	hdr := map[string]string{
-		"X-Internal-Token": cfg.AuthInternalToken,
-		"X-Session-Token":  ac.sessionToken,
-		"X-Device-Token":   ac.deviceToken,
-		"X-CSRF-Token":     csrf,
+		"Authorization":   "Bearer " + introspectToken,
+		"X-Session-Token": ac.sessionToken,
+		"X-Device-Token":  ac.deviceToken,
+		"X-CSRF-Token":    csrf,
 	}
 	code, body, _, err := authClient.PostJSON(ctx, "/internal/sessions/introspect", map[string]any{}, hdr)
 	if err != nil {
@@ -345,8 +357,8 @@ func runAuthMFA(ctx context.Context, cfg Config, logger *slog.Logger) error {
 }
 
 func runPDPDecision(ctx context.Context, cfg Config, logger *slog.Logger) error {
-	if cfg.AuthInternalToken == "" {
-		return errors.New("SMOKE_AUTH_INTERNAL_TOKEN not set")
+	if cfg.AuthNotificationMintToken == "" {
+		return errors.New("SMOKE_AUTH_NOTIFICATION_AUTH_MINT_TOKEN not set")
 	}
 	if cfg.PDPInternalToken == "" {
 		return errors.New("SMOKE_PDP_INTERNAL_TOKEN not set")
@@ -367,11 +379,15 @@ func runPDPDecision(ctx context.Context, cfg Config, logger *slog.Logger) error 
 	if err != nil {
 		return err
 	}
+	introspectToken, err := mintInternalServiceToken(ctx, cfg, "auth", "auth:sessions:introspect", "", cfg.AuthNotificationMintToken)
+	if err != nil {
+		return err
+	}
 	// fetch canonical subject via introspect
 	hdr := map[string]string{
-		"X-Internal-Token": cfg.AuthInternalToken,
-		"X-Session-Token":  ac.sessionToken,
-		"X-Device-Token":   ac.deviceToken,
+		"Authorization":   "Bearer " + introspectToken,
+		"X-Session-Token": ac.sessionToken,
+		"X-Device-Token":  ac.deviceToken,
 	}
 	code, body, _, err := authClient.PostJSON(ctx, "/internal/sessions/introspect", map[string]any{}, hdr)
 	if err != nil {
@@ -2131,6 +2147,136 @@ func runNotificationsInbox(ctx context.Context, cfg Config, logger *slog.Logger)
 	return nil
 }
 
+func runInternalScopedTokens(ctx context.Context, cfg Config, logger *slog.Logger) error {
+	if cfg.AuthInternalToken == "" {
+		return errors.New("SMOKE_AUTH_INTERNAL_TOKEN not set")
+	}
+	if cfg.AuthNotificationMintToken == "" {
+		return errors.New("SMOKE_AUTH_NOTIFICATION_AUTH_MINT_TOKEN not set")
+	}
+	if cfg.AuthPDPSocialAuthzMintToken == "" {
+		return errors.New("SMOKE_AUTH_PDP_SOCIAL_AUTHZ_MINT_TOKEN not set")
+	}
+	if cfg.AuthSocialTokenMintToken == "" {
+		return errors.New("SMOKE_AUTH_SOCIAL_TOKEN_MINT_TOKEN not set")
+	}
+	c, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	authClient, err := newAuthInternalClient(cfg)
+	if err != nil {
+		return err
+	}
+	socialClient, err := newSocialInternalClient(cfg)
+	if err != nil {
+		return err
+	}
+	notificationClient, err := newNotificationInternalClient(cfg)
+	if err != nil {
+		return err
+	}
+	ac, err := registerAndLogin(ctx, c, cfg)
+	if err != nil {
+		return err
+	}
+	if err := ensurePublicProfile(ctx, c, ac, "Scoped Token Profile", "negative internal token checks"); err != nil {
+		return err
+	}
+
+	code, body, _, err := authClient.PostJSON(ctx, "/internal/sessions/introspect", map[string]any{}, map[string]string{
+		"X-Internal-Token": cfg.AuthInternalToken,
+		"X-Session-Token":  ac.sessionToken,
+		"X-Device-Token":   ac.deviceToken,
+	})
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusUnauthorized, body); err != nil {
+		return fmt.Errorf("legacy auth introspect fallback still accepted: %w", err)
+	}
+
+	wrongScopeToken, err := mintInternalServiceToken(ctx, cfg, "auth", "auth:users:read", "", cfg.AuthNotificationMintToken)
+	if err != nil {
+		return err
+	}
+	code, body, _, err = authClient.PostJSON(ctx, "/internal/sessions/introspect", map[string]any{}, map[string]string{
+		"Authorization":   "Bearer " + wrongScopeToken,
+		"X-Session-Token": ac.sessionToken,
+		"X-Device-Token":  ac.deviceToken,
+	})
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusForbidden, body); err != nil {
+		return fmt.Errorf("wrong auth introspect scope not rejected: %w", err)
+	}
+
+	authzToken, err := mintInternalServiceToken(ctx, cfg, "social", "social:authz:read", ac.tenantID, cfg.AuthPDPSocialAuthzMintToken)
+	if err != nil {
+		return err
+	}
+	code, body, _, err = socialClient.PostJSON(ctx, "/internal/profiles/"+ac.username+"/authz-context", map[string]any{
+		"viewer": map[string]any{
+			"user_id":   ac.userID,
+			"tenant_id": "other-tenant",
+		},
+	}, map[string]string{"Authorization": "Bearer " + authzToken})
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusUnauthorized, body); err != nil {
+		return fmt.Errorf("tenant-mismatched social authz context not rejected: %w", err)
+	}
+
+	code, body, _, err = socialClient.PostJSON(ctx, "/internal/profiles/"+ac.username+"/authz-context", map[string]any{
+		"viewer": map[string]any{
+			"user_id":   ac.userID,
+			"tenant_id": ac.tenantID,
+		},
+	}, map[string]string{"Authorization": "Bearer " + authzToken + "tampered"})
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusUnauthorized, body); err != nil {
+		return fmt.Errorf("tampered social authz token not rejected: %w", err)
+	}
+
+	notificationToken, err := mintInternalServiceToken(ctx, cfg, "notification", "notifications:social:write", ac.tenantID, cfg.AuthSocialTokenMintToken)
+	if err != nil {
+		return err
+	}
+	code, body, _, err = notificationClient.PostJSON(ctx, "/internal/social", map[string]any{
+		"tenant_id": "other-tenant",
+		"user_id":   1,
+		"kind":      "follow",
+		"subject":   "New follower",
+		"body":      "negative smoke mismatch",
+	}, map[string]string{"Authorization": "Bearer " + notificationToken})
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusBadRequest, body); err != nil {
+		return fmt.Errorf("notification tenant mismatch not rejected: %w", err)
+	}
+
+	code, body, _, err = notificationClient.PostJSON(ctx, "/internal/social", map[string]any{
+		"tenant_id": ac.tenantID,
+		"user_id":   1,
+		"kind":      "follow",
+		"subject":   "New follower",
+		"body":      "negative smoke wrong audience",
+	}, map[string]string{"Authorization": "Bearer " + authzToken})
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusUnauthorized, body); err != nil {
+		return fmt.Errorf("wrong-audience notification token not rejected: %w", err)
+	}
+
+	return nil
+}
+
 func runBodyLimit(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	c, err := newClient(cfg)
 	if err != nil {
@@ -2257,15 +2403,19 @@ func registerAndLogin(ctx context.Context, c *client.Client, cfg Config) (*authC
 
 	idStr := ""
 	tenantID := ""
-	if cfg.AuthInternalToken != "" {
+	if cfg.AuthNotificationMintToken != "" {
 		authClient, err := newAuthInternalClient(cfg)
 		if err != nil {
 			return nil, err
 		}
+		introspectToken, err := mintInternalServiceToken(ctx, cfg, "auth", "auth:sessions:introspect", "", cfg.AuthNotificationMintToken)
+		if err != nil {
+			return nil, err
+		}
 		code, body, _, err = authClient.PostJSON(ctx, "/internal/sessions/introspect", map[string]any{}, map[string]string{
-			"X-Internal-Token": cfg.AuthInternalToken,
-			"X-Session-Token":  sess,
-			"X-Device-Token":   deviceToken,
+			"Authorization":   "Bearer " + introspectToken,
+			"X-Session-Token": sess,
+			"X-Device-Token":  deviceToken,
 		})
 		if err != nil {
 			return nil, err
