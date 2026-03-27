@@ -9,23 +9,24 @@ import (
 )
 
 type Config struct {
-	BaseURL                    string
-	AuthBaseURL                string
-	PDPBaseURL                 string
-	SocialBaseURL              string
-	AuthInternalToken          string
-	AuthEmailVerificationToken string
-	SocialAuthzInternalToken   string
-	SocialMediaInternalToken   string
-	NotificationOutboxDir      string
-	PDPInternalToken           string
-	AdminToken                 string
-	Timeout                    time.Duration
-	Verbose                    bool
-	SessionCookie              string
-	DeviceCookie               string
-	RedisAddr                  string
-	RedisPassword              string
+	BaseURL                     string
+	AuthBaseURL                 string
+	PDPBaseURL                  string
+	SocialBaseURL               string
+	AuthInternalToken           string
+	AuthPDPSocialAuthzMintToken string
+	AuthEmailVerificationToken  string
+	SocialAuthzInternalToken    string
+	SocialMediaInternalToken    string
+	NotificationOutboxDir       string
+	PDPInternalToken            string
+	AdminToken                  string
+	Timeout                     time.Duration
+	Verbose                     bool
+	SessionCookie               string
+	DeviceCookie                string
+	RedisAddr                   string
+	RedisPassword               string
 }
 
 func LoadConfig() Config {
@@ -49,23 +50,24 @@ func LoadConfig() Config {
 	authEmailVerificationToken := strings.TrimSpace(os.Getenv("SMOKE_AUTH_EMAIL_VERIFICATION_TOKEN"))
 
 	return Config{
-		BaseURL:                    strings.TrimRight(base, "/"),
-		AuthBaseURL:                strings.TrimRight(authBase, "/"),
-		PDPBaseURL:                 strings.TrimRight(pdpBase, "/"),
-		SocialBaseURL:              strings.TrimRight(socialBase, "/"),
-		AuthInternalToken:          authInternalToken,
-		AuthEmailVerificationToken: authEmailVerificationToken,
-		SocialAuthzInternalToken:   strings.TrimSpace(os.Getenv("SMOKE_SOCIAL_AUTHZ_INTERNAL_TOKEN")),
-		SocialMediaInternalToken:   strings.TrimSpace(os.Getenv("SMOKE_SOCIAL_MEDIA_INTERNAL_TOKEN")),
-		NotificationOutboxDir:      strings.TrimSpace(os.Getenv("SMOKE_NOTIFICATION_OUTBOX_DIR")),
-		PDPInternalToken:           strings.TrimSpace(os.Getenv("SMOKE_PDP_INTERNAL_TOKEN")),
-		AdminToken:                 strings.TrimSpace(os.Getenv("SMOKE_ADMIN_TOKEN")),
-		Timeout:                    timeout,
-		Verbose:                    verbose,
-		SessionCookie:              sessionCookie,
-		DeviceCookie:               deviceCookie,
-		RedisAddr:                  redisAddr,
-		RedisPassword:              redisPassword,
+		BaseURL:                     strings.TrimRight(base, "/"),
+		AuthBaseURL:                 strings.TrimRight(authBase, "/"),
+		PDPBaseURL:                  strings.TrimRight(pdpBase, "/"),
+		SocialBaseURL:               strings.TrimRight(socialBase, "/"),
+		AuthInternalToken:           authInternalToken,
+		AuthPDPSocialAuthzMintToken: strings.TrimSpace(os.Getenv("SMOKE_AUTH_PDP_SOCIAL_AUTHZ_MINT_TOKEN")),
+		AuthEmailVerificationToken:  authEmailVerificationToken,
+		SocialAuthzInternalToken:    strings.TrimSpace(os.Getenv("SMOKE_SOCIAL_AUTHZ_INTERNAL_TOKEN")),
+		SocialMediaInternalToken:    strings.TrimSpace(os.Getenv("SMOKE_SOCIAL_MEDIA_INTERNAL_TOKEN")),
+		NotificationOutboxDir:       strings.TrimSpace(os.Getenv("SMOKE_NOTIFICATION_OUTBOX_DIR")),
+		PDPInternalToken:            strings.TrimSpace(os.Getenv("SMOKE_PDP_INTERNAL_TOKEN")),
+		AdminToken:                  strings.TrimSpace(os.Getenv("SMOKE_ADMIN_TOKEN")),
+		Timeout:                     timeout,
+		Verbose:                     verbose,
+		SessionCookie:               sessionCookie,
+		DeviceCookie:                deviceCookie,
+		RedisAddr:                   redisAddr,
+		RedisPassword:               redisPassword,
 	}
 }
 

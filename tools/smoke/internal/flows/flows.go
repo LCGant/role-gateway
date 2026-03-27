@@ -470,8 +470,8 @@ func runPDPDecision(ctx context.Context, cfg Config, logger *slog.Logger) error 
 }
 
 func runSocialProfile(ctx context.Context, cfg Config, logger *slog.Logger) error {
-	if cfg.SocialAuthzInternalToken == "" {
-		return errors.New("SMOKE_SOCIAL_AUTHZ_INTERNAL_TOKEN not set")
+	if cfg.SocialAuthzInternalToken == "" && cfg.AuthPDPSocialAuthzMintToken == "" {
+		return errors.New("SMOKE_SOCIAL_AUTHZ_INTERNAL_TOKEN or SMOKE_AUTH_PDP_SOCIAL_AUTHZ_MINT_TOKEN not set")
 	}
 
 	ownerClient, err := newClient(cfg)
@@ -550,7 +550,7 @@ func runSocialProfile(ctx context.Context, cfg Config, logger *slog.Logger) erro
 		return err
 	}
 
-	if err := assertViewerRelationship(ctx, socialInternal, cfg.SocialAuthzInternalToken, viewer.userID, viewer.tenantID, owner.username, "viewer_follows"); err != nil {
+	if err := assertViewerRelationship(ctx, cfg, socialInternal, viewer.userID, viewer.tenantID, owner.username, "viewer_follows"); err != nil {
 		return err
 	}
 
@@ -589,7 +589,7 @@ func runSocialProfile(ctx context.Context, cfg Config, logger *slog.Logger) erro
 	if err := assert.Status(code, http.StatusOK, body); err != nil {
 		return err
 	}
-	if err := assertViewerRelationship(ctx, socialInternal, cfg.SocialAuthzInternalToken, viewer.userID, viewer.tenantID, owner.username, "viewer_friend"); err != nil {
+	if err := assertViewerRelationship(ctx, cfg, socialInternal, viewer.userID, viewer.tenantID, owner.username, "viewer_friend"); err != nil {
 		return err
 	}
 
@@ -2323,15 +2323,25 @@ func patchJSON(ctx context.Context, c *client.Client, path string, payload any) 
 	return assert.Status(code, http.StatusOK, respBody)
 }
 
-func assertViewerRelationship(ctx context.Context, c *client.Client, internalToken, viewerUserID, viewerTenantID, username, field string) error {
+func assertViewerRelationship(ctx context.Context, cfg Config, c *client.Client, viewerUserID, viewerTenantID, username, field string) error {
+	headers := map[string]string{}
+	if cfg.AuthPDPSocialAuthzMintToken != "" {
+		token, err := mintInternalServiceToken(ctx, cfg, "social", "social:authz:read", viewerTenantID, cfg.AuthPDPSocialAuthzMintToken)
+		if err != nil {
+			return err
+		}
+		headers["Authorization"] = "Bearer " + token
+	} else if cfg.SocialAuthzInternalToken != "" {
+		headers["X-Internal-Token"] = cfg.SocialAuthzInternalToken
+	} else {
+		return errors.New("missing internal authz credential")
+	}
 	code, body, _, err := c.PostJSON(ctx, "/internal/profiles/"+username+"/authz-context", map[string]any{
 		"viewer": map[string]any{
 			"user_id":   viewerUserID,
 			"tenant_id": viewerTenantID,
 		},
-	}, map[string]string{
-		"X-Internal-Token": internalToken,
-	})
+	}, headers)
 	if err != nil {
 		return err
 	}
@@ -2347,6 +2357,38 @@ func assertViewerRelationship(ctx context.Context, c *client.Client, internalTok
 		return fmt.Errorf("expected %s=true, got body=%s", field, string(body))
 	}
 	return nil
+}
+
+func mintInternalServiceToken(ctx context.Context, cfg Config, audience, scope, tenantID, mintToken string) (string, error) {
+	authInternal, err := newAuthInternalClient(cfg)
+	if err != nil {
+		return "", err
+	}
+	code, body, _, err := authInternal.PostJSON(ctx, "/internal/service-tokens", map[string]any{
+		"audience":  audience,
+		"scope":     scope,
+		"tenant_id": tenantID,
+	}, map[string]string{
+		"X-Internal-Token": mintToken,
+	})
+	if err != nil {
+		return "", err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return "", err
+	}
+	var out struct {
+		Token struct {
+			Value string `json:"value"`
+		} `json:"token"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(out.Token.Value) == "" {
+		return "", errors.New("minted token missing")
+	}
+	return strings.TrimSpace(out.Token.Value), nil
 }
 
 func cookieValue(c *client.Client, cfg Config, name string) string {
