@@ -532,9 +532,13 @@ func TestRateLimitAggregatesByClientIPAcrossPrefixes(t *testing.T) {
 func TestGatewayStripsInternalHeadersBeforeProxy(t *testing.T) {
 	var gotInternalToken string
 	var gotActorID string
+	var gotRole string
+	var gotPermissions string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotInternalToken = r.Header.Get("X-Internal-Token")
 		gotActorID = r.Header.Get("X-Actor-Id")
+		gotRole = r.Header.Get("X-Role")
+		gotPermissions = r.Header.Get("X-Permissions")
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(upstream.Close)
@@ -548,14 +552,16 @@ func TestGatewayStripsInternalHeadersBeforeProxy(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
 	req.Header.Set("X-Internal-Token", "client-forged")
 	req.Header.Set("X-Actor-Id", "forged-actor")
+	req.Header.Set("X-Role", "admin")
+	req.Header.Set("X-Permissions", "all")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
-	if gotInternalToken != "" || gotActorID != "" {
-		t.Fatalf("expected internal headers to be stripped, got token=%q actor=%q", gotInternalToken, gotActorID)
+	if gotInternalToken != "" || gotActorID != "" || gotRole != "" || gotPermissions != "" {
+		t.Fatalf("expected internal headers to be stripped, got token=%q actor=%q role=%q permissions=%q", gotInternalToken, gotActorID, gotRole, gotPermissions)
 	}
 }
 
@@ -580,6 +586,58 @@ func TestPayloadTooLargeByContentLength(t *testing.T) {
 
 	if rr.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d", rr.Code)
+	}
+}
+
+func TestGatewayRejectsConflictingTransferEncodingAndContentLength(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL, upstream.URL)
+	h, err := NewHandler(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("NewHandler error: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{}`))
+	req.TransferEncoding = []string{"chunked"}
+	req.ContentLength = 2
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for conflicting framing headers, got %d", rr.Code)
+	}
+}
+
+func TestGatewayUpdatesContentLengthAfterBodyRead(t *testing.T) {
+	var gotContentLength string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentLength = r.Header.Get("Content-Length")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	cfg := testConfig(upstream.URL, upstream.URL, upstream.URL, upstream.URL)
+	cfg.MaxBodyBytes = 16
+	h, err := NewHandler(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("NewHandler error: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Length", "999")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if gotContentLength != "2" {
+		t.Fatalf("expected upstream content-length to match rewritten body, got %q", gotContentLength)
 	}
 }
 

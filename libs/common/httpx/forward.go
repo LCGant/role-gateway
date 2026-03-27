@@ -62,6 +62,8 @@ func stripInternalHeaders(h http.Header) {
 		"X-Metrics-Token",
 		"X-Actor-Id",
 		"X-Actor-Type",
+		"X-Role",
+		"X-Permissions",
 		"X-Tenant-Id",
 		"X-User-Id",
 	} {

@@ -169,6 +169,10 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) string {
 		httpx.WriteBadRequest(w, "bad_request")
 		return "invalid"
 	}
+	if hasConflictingTransferEncoding(r) {
+		httpx.WriteBadRequest(w, "bad_request")
+		return "invalid"
+	}
 	path := canonicalPath(rawPath)
 	if !hostAllowed(r.Host) {
 		httpx.WriteBadRequest(w, "invalid_host")
@@ -270,6 +274,8 @@ func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request, rt *route)
 		}
 		r.Body = io.NopCloser(bytes.NewReader(payload))
 		r.ContentLength = int64(len(payload))
+		r.Header.Set("Content-Length", strconv.Itoa(len(payload)))
+		r.Header.Del("Transfer-Encoding")
 	}
 
 	rt.proxy.ServeHTTP(w, r)
@@ -337,6 +343,18 @@ func (h *Handler) allowLogin(r *http.Request) bool {
 	}
 	key := clientIP(r) + "|login"
 	return h.loginLimiter.Allow(key, time.Now())
+}
+
+func hasConflictingTransferEncoding(r *http.Request) bool {
+	if r.ContentLength < 0 || len(r.TransferEncoding) == 0 {
+		return false
+	}
+	for _, value := range r.TransferEncoding {
+		if !strings.EqualFold(strings.TrimSpace(value), "identity") {
+			return true
+		}
+	}
+	return false
 }
 
 func newProxy(name, prefix string, target *url.URL, transport *http.Transport, logger *slog.Logger, br *circuit.Breaker) *route {

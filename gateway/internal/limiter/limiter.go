@@ -54,6 +54,9 @@ func WithMaxEntries(n int) Option {
 
 // New returns a limiter. If limit <= 0 the limiter allows all requests.
 func New(limit float64, burst int, opts ...Option) *Limiter {
+	if burst <= 0 {
+		burst = 1
+	}
 	l := &Limiter{
 		limit:      limit,
 		burst:      float64(burst),
@@ -78,17 +81,11 @@ func (l *Limiter) Allow(key string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if now.Sub(l.lastSweep) >= l.sweepEvery {
-		for k, b := range l.bucket {
-			if now.Sub(b.last) > l.ttl {
-				delete(l.bucket, k)
-			}
-		}
-		l.lastSweep = now
-	}
+	l.sweepExpired(now, false)
 
 	b, ok := l.bucket[key]
 	if !ok {
+		l.sweepExpired(now, true)
 		if l.maxEntries > 0 && len(l.bucket) >= l.maxEntries {
 			l.evictForNewKey(now)
 			if len(l.bucket) >= l.maxEntries {
@@ -114,6 +111,18 @@ func (l *Limiter) Allow(key string, now time.Time) bool {
 		return true
 	}
 	return false
+}
+
+func (l *Limiter) sweepExpired(now time.Time, force bool) {
+	if !force && now.Sub(l.lastSweep) < l.sweepEvery {
+		return
+	}
+	for k, b := range l.bucket {
+		if now.Sub(b.last) > l.ttl {
+			delete(l.bucket, k)
+		}
+	}
+	l.lastSweep = now
 }
 
 func (l *Limiter) evictForNewKey(now time.Time) {

@@ -78,3 +78,34 @@ func TestLimiterMaxEntries(t *testing.T) {
 		t.Fatal("expected new key to be retained after eviction")
 	}
 }
+
+func TestLimiterNegativeBurstClampsToSingleToken(t *testing.T) {
+	now := time.Now()
+	l := New(1, -5)
+
+	if !l.Allow("k", now) {
+		t.Fatalf("first request should pass with clamped burst")
+	}
+	if l.Allow("k", now) {
+		t.Fatalf("second request should fail with clamped single-token burst")
+	}
+}
+
+func TestLimiterSweepsExpiredEntriesWhenNewKeysArrive(t *testing.T) {
+	now := time.Now()
+	l := New(1, 1, WithTTL(time.Second), WithSweepEvery(time.Hour))
+	l.lastSweep = now
+
+	if !l.Allow("old", now) {
+		t.Fatalf("initial allow failed")
+	}
+	if !l.Allow("new", now.Add(2*time.Second)) {
+		t.Fatalf("new key should pass")
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, ok := l.bucket["old"]; ok {
+		t.Fatalf("expected expired key to be swept on new-key path")
+	}
+}
