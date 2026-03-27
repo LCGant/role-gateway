@@ -96,6 +96,30 @@ type authContext struct {
 	tenantID     string
 }
 
+func fetchPublicCSRF(ctx context.Context, c *client.Client, cfg Config) (string, error) {
+	code, body, _, err := c.Get(ctx, "/auth/csrf", nil)
+	if err != nil {
+		return "", err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return "", err
+	}
+	var resp struct {
+		CSRF struct {
+			Token string `json:"token"`
+		} `json:"csrf"`
+	}
+	_ = json.Unmarshal(body, &resp)
+	token := cookieValue(c, cfg, "csrf_token")
+	if token == "" {
+		token = strings.TrimSpace(resp.CSRF.Token)
+	}
+	if token == "" {
+		return "", errors.New("public csrf token missing")
+	}
+	return token, nil
+}
+
 func newClient(cfg Config) (*client.Client, error) {
 	return client.New(cfg.BaseURL, 10*time.Second)
 }
@@ -318,7 +342,11 @@ func runAuthMFA(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	}
 	// login with totp
 	loginBody := map[string]string{"identifier": ac.email, "password": ac.password, "totp_code": codeStr}
-	code, _, _, err = c.PostJSON(ctx, "/auth/login", loginBody, nil)
+	publicCSRF, err := fetchPublicCSRF(ctx, c, cfg)
+	if err != nil {
+		return err
+	}
+	code, _, _, err = c.PostJSON(ctx, "/auth/login", loginBody, map[string]string{"X-CSRF-Token": publicCSRF, "X-Requested-With": "cli"})
 	if err != nil {
 		return err
 	}
@@ -341,7 +369,11 @@ func runAuthMFA(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	// login with backup code
 	backup := vr.BackupCodes.Codes[0]
 	backupBody := map[string]string{"identifier": ac.email, "password": ac.password, "backup_code": backup}
-	code, _, _, err = c.PostJSON(ctx, "/auth/login", backupBody, nil)
+	publicCSRF, err = fetchPublicCSRF(ctx, c, cfg)
+	if err != nil {
+		return err
+	}
+	code, _, _, err = c.PostJSON(ctx, "/auth/login", backupBody, map[string]string{"X-CSRF-Token": publicCSRF, "X-Requested-With": "cli"})
 	if err != nil {
 		return err
 	}
@@ -349,7 +381,11 @@ func runAuthMFA(ctx context.Context, cfg Config, logger *slog.Logger) error {
 		return err
 	}
 	// reuse backup should fail
-	code, _, _, err = c.PostJSON(ctx, "/auth/login", backupBody, nil)
+	publicCSRF, err = fetchPublicCSRF(ctx, c, cfg)
+	if err != nil {
+		return err
+	}
+	code, _, _, err = c.PostJSON(ctx, "/auth/login", backupBody, map[string]string{"X-CSRF-Token": publicCSRF, "X-Requested-With": "cli"})
 	if err == nil && code == http.StatusOK {
 		return errors.New("backup code reused successfully")
 	}
@@ -2283,7 +2319,11 @@ func runBodyLimit(ctx context.Context, cfg Config, logger *slog.Logger) error {
 		return err
 	}
 	big := bytes.Repeat([]byte("A"), 2_000_000)
-	code, body, _, err := c.Do(ctx, http.MethodPost, "/auth/login", big, map[string]string{"Content-Type": "application/json"})
+	publicCSRF, err := fetchPublicCSRF(ctx, c, cfg)
+	if err != nil {
+		return err
+	}
+	code, body, _, err := c.Do(ctx, http.MethodPost, "/auth/login", big, map[string]string{"Content-Type": "application/json", "X-CSRF-Token": publicCSRF, "X-Requested-With": "cli"})
 	if err != nil {
 		return err
 	}
@@ -2300,8 +2340,13 @@ func registerAndLogin(ctx context.Context, c *client.Client, cfg Config) (*authC
 	email := fmt.Sprintf("user_%d@example.com", time.Now().UnixNano())
 	username := strings.Split(email, "@")[0]
 	password := "StrongP@ss1"
+	publicCSRF, err := fetchPublicCSRF(ctx, c, cfg)
+	if err != nil {
+		return nil, err
+	}
+	publicHeaders := map[string]string{"X-CSRF-Token": publicCSRF, "X-Requested-With": "cli"}
 	regBody := map[string]string{"email": email, "username": username, "password": password}
-	code, body, _, err := c.PostJSON(ctx, "/auth/register", regBody, nil)
+	code, body, _, err := c.PostJSON(ctx, "/auth/register", regBody, publicHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -2315,27 +2360,25 @@ func registerAndLogin(ctx context.Context, c *client.Client, cfg Config) (*authC
 			return nil, err
 		}
 		verificationToken = token
-	} else if cfg.AuthEmailVerificationToken != "" {
+	} else if cfg.AuthEmailVerificationToken != "" && cfg.NotificationOutboxDir != "" {
 		verifyHeaders := map[string]string{"X-Internal-Token": cfg.AuthEmailVerificationToken}
 		code, body, _, err = c.PostJSON(ctx, cfg.AuthBaseURL+"/internal/email-verifications/issue", map[string]string{"email": email}, verifyHeaders)
 		if err != nil {
 			return nil, err
 		}
-		if err := assert.Status(code, http.StatusOK, body); err != nil {
+		if err := assert.Status(code, http.StatusAccepted, body); err != nil {
 			return nil, err
 		}
-		var issue struct {
-			Token string `json:"token"`
-		}
-		if err := json.Unmarshal(body, &issue); err != nil {
+		token, err := waitForOutboxToken(cfg.NotificationOutboxDir, "verify", email)
+		if err != nil {
 			return nil, err
 		}
-		verificationToken = strings.TrimSpace(issue.Token)
+		verificationToken = token
 	}
 	if verificationToken == "" {
 		return nil, errors.New("email verification token missing")
 	}
-	code, body, _, err = c.PostJSON(ctx, "/auth/email/verify/confirm", map[string]string{"token": verificationToken}, nil)
+	code, body, _, err = c.PostJSON(ctx, "/auth/email/verify/confirm", map[string]string{"token": verificationToken}, publicHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -2344,7 +2387,7 @@ func registerAndLogin(ctx context.Context, c *client.Client, cfg Config) (*authC
 	}
 	loginBody := map[string]string{"identifier": email, "password": password}
 	for attempts := 0; attempts < 5; attempts++ {
-		code, body, _, err = c.PostJSON(ctx, "/auth/login", loginBody, nil)
+		code, body, _, err = c.PostJSON(ctx, "/auth/login", loginBody, publicHeaders)
 		if err != nil {
 			return nil, err
 		}
