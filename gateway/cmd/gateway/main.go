@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"log/slog"
 	"net/http"
 	"os"
@@ -73,6 +74,7 @@ func main() {
 		listenAddr := cfg.HTTPAddr
 		serve := srv.ListenAndServe
 		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+			srv.TLSConfig = buildServerTLSConfig()
 			if cfg.HTTPSAddr != "" {
 				srv.Addr = cfg.HTTPSAddr
 				listenAddr = cfg.HTTPSAddr
@@ -96,4 +98,19 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("shutdown_complete")
+}
+
+func buildServerTLSConfig() *tls.Config {
+	return &tls.Config{
+		MinVersion:               tls.VersionTLS12,
+		PreferServerCipherSuites: true,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+		},
+	}
 }
