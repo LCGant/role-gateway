@@ -286,6 +286,9 @@ func (c Config) Validate() error {
 	if c.TLSCertFile == "" && c.TLSKeyFile == "" && !c.AllowPlaintextHTTP {
 		return errors.New("gateway requires TLS or explicit GATEWAY_ALLOW_PLAINTEXT_HTTP=true")
 	}
+	if c.LogDevEnabled && !c.AllowPlaintextHTTP {
+		return errors.New("GATEWAY_LOG_DEV is only allowed when GATEWAY_ALLOW_PLAINTEXT_HTTP=true")
+	}
 	if c.BreakerEnabled {
 		if err := configx.RequirePositive("GATEWAY_BREAKER_FAILURES", int64(c.BreakerFailures)); err != nil {
 			return err

@@ -175,6 +175,15 @@ func TestValidateRejectsEnabledLoginRateLimitWithZeroBurst(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsLogDevWithoutPlaintextDevOptIn(t *testing.T) {
+	cfg := defaults()
+	cfg.LogDevEnabled = true
+	cfg.AllowPlaintextHTTP = false
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error when logdev is enabled without plaintext dev opt-in")
+	}
+}
+
 // Ensure env cleanup between tests.
 func TestMain(m *testing.M) {
 	code := m.Run()
