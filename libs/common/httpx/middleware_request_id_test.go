@@ -61,3 +61,19 @@ func TestRequestIDSanitizesInvalidHeader(t *testing.T) {
 		t.Fatalf("expected invalid request id to be replaced, got %q", got)
 	}
 }
+
+func TestEnsureRequestIDUsesContextValue(t *testing.T) {
+	h := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rid := EnsureRequestID(r)
+		if rid == "" {
+			t.Fatalf("expected ensured request id")
+		}
+		if got := r.Header.Get("X-Request-Id"); got != rid {
+			t.Fatalf("expected ensured header %q, got %q", rid, got)
+		}
+	}))
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	h.ServeHTTP(rr, req)
+}

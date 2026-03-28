@@ -47,3 +47,28 @@ func TestIsAdminPath(t *testing.T) {
 		}
 	}
 }
+
+func TestCanonicalPath(t *testing.T) {
+	cases := map[string]string{
+		"":          "/",
+		"/":         "/",
+		"/a/../b":   "/b",
+		"/a//b":     "/a/b",
+		"relative":  "/relative",
+		"/./nested": "/nested",
+	}
+	for input, want := range cases {
+		if got := CanonicalPath(input); got != want {
+			t.Fatalf("CanonicalPath(%q)=%q want %q", input, got, want)
+		}
+	}
+}
+
+func TestIsCanonicalPath(t *testing.T) {
+	if !IsCanonicalPath("/a/b") {
+		t.Fatalf("expected canonical path")
+	}
+	if IsCanonicalPath("/a//b") {
+		t.Fatalf("expected non-canonical path to be rejected")
+	}
+}

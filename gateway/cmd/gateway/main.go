@@ -38,8 +38,8 @@ func main() {
 	}
 
 	mws := []func(http.Handler) http.Handler{
-		httpx.Recover,
 		httpx.RequestID,
+		httpx.Recover,
 	}
 	if cfg.LogDevEnabled {
 		mws = append(mws, func(next http.Handler) http.Handler {

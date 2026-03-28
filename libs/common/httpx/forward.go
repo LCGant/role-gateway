@@ -46,11 +46,7 @@ func SetForwardHeaders(r *http.Request, trustedCIDRs ...*net.IPNet) {
 			r.Header.Set("X-Forwarded-Proto", "http")
 		}
 	}
-	if rid := SanitizeRequestID(r.Header.Get("X-Request-Id")); rid == "" {
-		r.Header.Set("X-Request-Id", newRequestID())
-	} else {
-		r.Header.Set("X-Request-Id", rid)
-	}
+	EnsureRequestID(r)
 }
 
 func stripInternalHeaders(h http.Header) {

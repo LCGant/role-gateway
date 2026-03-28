@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"net/http"
+	"path"
 	"strings"
 )
 
@@ -33,4 +34,24 @@ func IsAdminPath(path string) bool {
 		return true
 	}
 	return strings.HasPrefix(path, "/v1/admin/")
+}
+
+// CanonicalPath normalizes a raw URL path and guarantees a leading slash.
+func CanonicalPath(raw string) string {
+	if raw == "" {
+		return "/"
+	}
+	cleaned := path.Clean(raw)
+	if cleaned == "." {
+		return "/"
+	}
+	if !strings.HasPrefix(cleaned, "/") {
+		return "/" + cleaned
+	}
+	return cleaned
+}
+
+// IsCanonicalPath reports whether raw is already in canonical path form.
+func IsCanonicalPath(raw string) bool {
+	return raw == CanonicalPath(raw)
 }
