@@ -2270,6 +2270,19 @@ func runInternalScopedTokens(ctx context.Context, cfg Config, logger *slog.Logge
 			"user_id":   ac.userID,
 			"tenant_id": ac.tenantID,
 		},
+	}, map[string]string{"X-Internal-Token": "legacy-forged"})
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusUnauthorized, body); err != nil {
+		return fmt.Errorf("legacy social authz header fallback still accepted: %w", err)
+	}
+
+	code, body, _, err = socialClient.PostJSON(ctx, "/internal/profiles/"+ac.username+"/authz-context", map[string]any{
+		"viewer": map[string]any{
+			"user_id":   ac.userID,
+			"tenant_id": ac.tenantID,
+		},
 	}, map[string]string{"Authorization": "Bearer " + authzToken + "tampered"})
 	if err != nil {
 		return err
@@ -2278,10 +2291,54 @@ func runInternalScopedTokens(ctx context.Context, cfg Config, logger *slog.Logge
 		return fmt.Errorf("tampered social authz token not rejected: %w", err)
 	}
 
+	replayAuthzToken, err := mintInternalServiceToken(ctx, cfg, "social", "social:authz:read", ac.tenantID, cfg.AuthPDPSocialAuthzMintToken)
+	if err != nil {
+		return err
+	}
+	code, body, _, err = socialClient.PostJSON(ctx, "/internal/profiles/"+ac.username+"/authz-context", map[string]any{
+		"viewer": map[string]any{
+			"user_id":   ac.userID,
+			"tenant_id": ac.tenantID,
+		},
+	}, map[string]string{"Authorization": "Bearer " + replayAuthzToken})
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusOK, body); err != nil {
+		return fmt.Errorf("scoped social authz token did not succeed before replay check: %w", err)
+	}
+
+	code, body, _, err = socialClient.PostJSON(ctx, "/internal/profiles/"+ac.username+"/authz-context", map[string]any{
+		"viewer": map[string]any{
+			"user_id":   ac.userID,
+			"tenant_id": ac.tenantID,
+		},
+	}, map[string]string{"Authorization": "Bearer " + replayAuthzToken})
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusUnauthorized, body); err != nil {
+		return fmt.Errorf("replayed social authz token not rejected: %w", err)
+	}
+
 	notificationToken, err := mintInternalServiceToken(ctx, cfg, "notification", "notifications:social:write", ac.tenantID, cfg.AuthSocialTokenMintToken)
 	if err != nil {
 		return err
 	}
+	code, body, _, err = notificationClient.PostJSON(ctx, "/internal/social", map[string]any{
+		"tenant_id": ac.tenantID,
+		"user_id":   1,
+		"kind":      "follow",
+		"subject":   "New follower",
+		"body":      "legacy header fallback",
+	}, map[string]string{"X-Internal-Token": "legacy-forged"})
+	if err != nil {
+		return err
+	}
+	if err := assert.Status(code, http.StatusUnauthorized, body); err != nil {
+		return fmt.Errorf("legacy notification social fallback still accepted: %w", err)
+	}
+
 	code, body, _, err = notificationClient.PostJSON(ctx, "/internal/social", map[string]any{
 		"tenant_id": "other-tenant",
 		"user_id":   1,
