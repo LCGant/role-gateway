@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/LCGant/role-gateway/libs/common/httpx"
 )
 
 // Options controls the dev-style HTTP logger.
@@ -28,10 +30,10 @@ func Middleware(opts Options, next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		start := now()
-		rec := &responseRecorder{ResponseWriter: rw}
+		rec := &httpx.StatusRecorder{ResponseWriter: rw}
 		next.ServeHTTP(rec, r)
 
-		status := rec.status
+		status := rec.Status()
 		if status == 0 {
 			status = http.StatusOK
 		}
@@ -87,21 +89,4 @@ func fmtDuration(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%.2fs", d.Seconds())
 	}
-}
-
-type responseRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *responseRecorder) WriteHeader(status int) {
-	r.status = status
-	r.ResponseWriter.WriteHeader(status)
-}
-
-func (r *responseRecorder) Write(b []byte) (int, error) {
-	if r.status == 0 {
-		r.status = http.StatusOK
-	}
-	return r.ResponseWriter.Write(b)
 }

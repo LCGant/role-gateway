@@ -33,21 +33,19 @@ func SetForwardHeaders(r *http.Request, trustedCIDRs ...*net.IPNet) {
 		}
 		if priorXFP != "" {
 			r.Header.Set("X-Forwarded-Proto", priorXFP)
-			goto requestID
+		} else if r.TLS != nil {
+			r.Header.Set("X-Forwarded-Proto", "https")
+		} else {
+			r.Header.Set("X-Forwarded-Proto", "http")
 		}
 	} else {
 		r.Header.Set("X-Forwarded-For", ip)
-	}
-
-	if r.Header.Get("X-Forwarded-Proto") == "" {
 		if r.TLS != nil {
 			r.Header.Set("X-Forwarded-Proto", "https")
 		} else {
 			r.Header.Set("X-Forwarded-Proto", "http")
 		}
 	}
-
-requestID:
 	if rid := SanitizeRequestID(r.Header.Get("X-Request-Id")); rid == "" {
 		r.Header.Set("X-Request-Id", newRequestID())
 	} else {

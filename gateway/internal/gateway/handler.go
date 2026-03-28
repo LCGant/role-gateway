@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/rand"
 	"crypto/tls"
@@ -131,7 +130,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	reqID := extractRequestID(r)
 
-	rec := &responseRecorder{ResponseWriter: w}
+	rec := &httpx.StatusRecorder{ResponseWriter: w}
 	upstream := h.dispatch(rec, r)
 
 	status := rec.Status()
@@ -160,36 +159,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // dispatch routes the request to the appropriate handler based on the path.
 func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) string {
-	if err := r.Context().Err(); err != nil {
-		httpx.WriteError(w, http.StatusGatewayTimeout, "timeout")
+	path, ok := h.preDispatchChecks(w, r)
+	if !ok {
 		return "gateway"
 	}
-	rawPath := r.URL.Path
-	if !isCanonicalPath(rawPath) {
-		httpx.WriteBadRequest(w, "bad_request")
-		return "invalid"
+	if upstream, handled := h.handleGatewayLocalRoutes(w, r, path); handled {
+		return upstream
 	}
-	if hasConflictingTransferEncoding(r) {
-		httpx.WriteBadRequest(w, "bad_request")
-		return "invalid"
-	}
-	path := canonicalPath(rawPath)
-	if !hostAllowed(r.Host) {
-		httpx.WriteBadRequest(w, "invalid_host")
-		return "gateway"
-	}
-
 	switch {
-	case path == "/healthz":
-		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-		return "gateway"
-	case path == "/metrics":
-		if !isLoopbackIP(clientIP(r)) {
-			httpx.WriteForbidden(w)
-			return "gateway"
-		}
-		expvar.Handler().ServeHTTP(w, r)
-		return "gateway"
 	case path == "/auth" || strings.HasPrefix(path, "/auth/"):
 		return h.handleAuth(w, r, h.routes["/auth"])
 	case path == "/pdp" || strings.HasPrefix(path, "/pdp/"):
@@ -219,7 +196,7 @@ func (h *Handler) handleAuth(w http.ResponseWriter, r *http.Request, rt *route) 
 		return "missing"
 	}
 	stripped := httpx.StripPrefix(r.URL.Path, rt.prefix)
-	if isAuthInternalPath(stripped) {
+	if isInternalPath(stripped) {
 		httpx.WriteForbidden(w)
 		return rt.name
 	}
@@ -228,56 +205,9 @@ func (h *Handler) handleAuth(w http.ResponseWriter, r *http.Request, rt *route) 
 
 // handleProxy proxies the request to the specified route's upstream.
 func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request, rt *route) string {
-	if err := r.Context().Err(); err != nil {
-		httpx.WriteError(w, http.StatusGatewayTimeout, "timeout")
-		return "gateway"
+	if upstream, ok := h.preProxyChecks(w, r, rt); !ok {
+		return upstream
 	}
-	if rt == nil {
-		httpx.WriteBadGateway(w)
-		return "missing"
-	}
-
-	if h.strictJSON && httpx.MethodHasBody(r.Method) && !httpx.HasJSONContentType(r) {
-		httpx.WriteBadRequest(w, "invalid_content_type")
-		return rt.name
-	}
-
-	if rt.breaker != nil {
-		if err := rt.breaker.Allow(time.Now()); err != nil {
-			updateBreakerMetric(rt)
-			httpx.WriteError(w, http.StatusServiceUnavailable, "unavailable")
-			return rt.name
-		}
-	}
-
-	if httpx.MethodHasBody(r.Method) && r.ContentLength > 0 && r.ContentLength > h.maxBodyBytes {
-		httpx.WritePayloadTooLarge(w)
-		return rt.name
-	}
-	if !h.allowRequest(r, rt.prefix) {
-		httpx.WriteRateLimited(w)
-		return rt.name
-	}
-	if isLoginOrRegister(r.URL.Path) && !h.allowLogin(r) {
-		httpx.WriteRateLimitedWithRetry(w, 1*time.Second)
-		return rt.name
-	}
-	if httpx.MethodHasBody(r.Method) && h.maxBodyBytes > 0 {
-		payload, err := io.ReadAll(io.LimitReader(r.Body, h.maxBodyBytes+1))
-		if err != nil {
-			httpx.WriteBadRequest(w, "bad_request")
-			return rt.name
-		}
-		if int64(len(payload)) > h.maxBodyBytes {
-			httpx.WritePayloadTooLarge(w)
-			return rt.name
-		}
-		r.Body = io.NopCloser(bytes.NewReader(payload))
-		r.ContentLength = int64(len(payload))
-		r.Header.Set("Content-Length", strconv.Itoa(len(payload)))
-		r.Header.Del("Transfer-Encoding")
-	}
-
 	rt.proxy.ServeHTTP(w, r)
 
 	if rt.breaker != nil {
@@ -287,6 +217,106 @@ func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request, rt *route)
 		updateBreakerMetric(rt)
 	}
 	return rt.name
+}
+
+func (h *Handler) preDispatchChecks(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if err := r.Context().Err(); err != nil {
+		httpx.WriteError(w, http.StatusGatewayTimeout, "timeout")
+		return "", false
+	}
+	rawPath := r.URL.Path
+	if !isCanonicalPath(rawPath) || hasConflictingTransferEncoding(r) {
+		httpx.WriteBadRequest(w, "bad_request")
+		return "", false
+	}
+	if !hostAllowed(r.Host) {
+		httpx.WriteBadRequest(w, "invalid_host")
+		return "", false
+	}
+	return canonicalPath(rawPath), true
+}
+
+func (h *Handler) handleGatewayLocalRoutes(w http.ResponseWriter, r *http.Request, path string) (string, bool) {
+	switch path {
+	case "/healthz":
+		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return "gateway", true
+	case "/metrics":
+		if !isLoopbackIP(clientIP(r)) {
+			httpx.WriteForbidden(w)
+			return "gateway", true
+		}
+		expvar.Handler().ServeHTTP(w, r)
+		return "gateway", true
+	default:
+		return "", false
+	}
+}
+
+func (h *Handler) preProxyChecks(w http.ResponseWriter, r *http.Request, rt *route) (string, bool) {
+	if err := r.Context().Err(); err != nil {
+		httpx.WriteError(w, http.StatusGatewayTimeout, "timeout")
+		return "gateway", false
+	}
+	if rt == nil {
+		httpx.WriteBadGateway(w)
+		return "missing", false
+	}
+	if h.strictJSON && httpx.MethodHasBody(r.Method) && !httpx.HasJSONContentType(r) {
+		httpx.WriteBadRequest(w, "invalid_content_type")
+		return rt.name, false
+	}
+	if rt.breaker != nil {
+		if err := rt.breaker.Allow(time.Now()); err != nil {
+			updateBreakerMetric(rt)
+			httpx.WriteError(w, http.StatusServiceUnavailable, "unavailable")
+			return rt.name, false
+		}
+	}
+	if httpx.MethodHasBody(r.Method) && r.ContentLength > 0 && r.ContentLength > h.maxBodyBytes {
+		httpx.WritePayloadTooLarge(w)
+		return rt.name, false
+	}
+	if !h.allowRequest(r, rt.prefix) {
+		httpx.WriteRateLimited(w)
+		return rt.name, false
+	}
+	if isLoginOrRegister(r.URL.Path) && !h.allowLogin(r) {
+		httpx.WriteRateLimitedWithRetry(w, 1*time.Second)
+		return rt.name, false
+	}
+	if err := h.rewriteBodyForProxy(r); err != nil {
+		var tooLarge bodyTooLargeError
+		if errors.As(err, &tooLarge) {
+			httpx.WritePayloadTooLarge(w)
+		} else {
+			httpx.WriteBadRequest(w, "bad_request")
+		}
+		return rt.name, false
+	}
+	return rt.name, true
+}
+
+type bodyTooLargeError struct{}
+
+func (bodyTooLargeError) Error() string { return "body too large" }
+
+func (h *Handler) rewriteBodyForProxy(r *http.Request) error {
+	if !httpx.MethodHasBody(r.Method) || h.maxBodyBytes <= 0 {
+		return nil
+	}
+	payload, err := io.ReadAll(io.LimitReader(r.Body, h.maxBodyBytes+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(payload)) > h.maxBodyBytes {
+		return bodyTooLargeError{}
+	}
+	r.Body = io.NopCloser(bytes.NewReader(payload))
+	r.ContentLength = int64(len(payload))
+	r.Header.Set("Content-Length", strconv.Itoa(len(payload)))
+	r.Header.Del("Transfer-Encoding")
+	return nil
 }
 
 func (h *Handler) handlePDP(w http.ResponseWriter, r *http.Request, rt *route) string {
@@ -309,7 +339,7 @@ func (h *Handler) handleSocial(w http.ResponseWriter, r *http.Request, rt *route
 		return "missing"
 	}
 	stripped := httpx.StripPrefix(r.URL.Path, rt.prefix)
-	if isSocialInternalPath(stripped) {
+	if isInternalPath(stripped) {
 		httpx.WriteForbidden(w)
 		return rt.name
 	}
@@ -445,50 +475,8 @@ func (h *Handler) adminAllowed(r *http.Request) bool {
 	return isLoopbackIP(clientIP(r))
 }
 
-type responseRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *responseRecorder) WriteHeader(status int) {
-	r.status = status
-	r.ResponseWriter.WriteHeader(status)
-}
-
-func (r *responseRecorder) Write(b []byte) (int, error) {
-	if r.status == 0 {
-		r.status = http.StatusOK
-	}
-	return r.ResponseWriter.Write(b)
-}
-
-func (r *responseRecorder) Status() int {
-	return r.status
-}
-
-func (r *responseRecorder) Flush() {
-	if f, ok := r.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
-func (r *responseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	h, ok := r.ResponseWriter.(http.Hijacker)
-	if !ok {
-		return nil, nil, errors.New("hijacker not supported")
-	}
-	return h.Hijack()
-}
-
-func (r *responseRecorder) Push(target string, opts *http.PushOptions) error {
-	if p, ok := r.ResponseWriter.(http.Pusher); ok {
-		return p.Push(target, opts)
-	}
-	return http.ErrNotSupported
-}
-
 func statusFromWriter(w http.ResponseWriter) int {
-	if rr, ok := w.(*responseRecorder); ok {
+	if rr, ok := w.(*httpx.StatusRecorder); ok {
 		return rr.Status()
 	}
 	type statuser interface{ Status() int }
@@ -517,11 +505,7 @@ func isPDPDecisionPath(path string) bool {
 	return path == "/v1/decision" || path == "/v1/batch-decision"
 }
 
-func isAuthInternalPath(path string) bool {
-	return path == "/internal" || strings.HasPrefix(path, "/internal/")
-}
-
-func isSocialInternalPath(path string) bool {
+func isInternalPath(path string) bool {
 	return path == "/internal" || strings.HasPrefix(path, "/internal/")
 }
 

@@ -3,7 +3,6 @@ package httpx
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
 	"net"
 	"net/http"
 	"time"
@@ -46,20 +45,5 @@ func NewProxyMTLSTransport(roots *x509.CertPool, clientCert *tls.Certificate) (*
 	if clientCert != nil {
 		t.TLSClientConfig.Certificates = []tls.Certificate{*clientCert}
 	}
-	// Ensure HTTP/2 remains enabled when TLSClientConfig is set.
-	if err := http2ConfigureIfPossible(t); err != nil {
-		return nil, err
-	}
 	return t, nil
-}
-
-// http2ConfigureIfPossible enables HTTP/2 if available (no new deps).
-func http2ConfigureIfPossible(t *http.Transport) error {
-	if t == nil {
-		return errors.New("transport is nil")
-	}
-	// Go auto-configures HTTP/2 on default transports; setting TLSClientConfig can disable it.
-	// The minimal way to keep it is to leave ForceAttemptHTTP2=true (already set).
-	// No-op to avoid importing x/net/http2.
-	return nil
 }
