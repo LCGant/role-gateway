@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1444,9 +1445,10 @@ func runSocialMap(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	if err := ensurePublicProfile(ctx, ownerClient, owner, "Map Owner", "mapping places"); err != nil {
 		return err
 	}
+	mapSearchToken := "map-" + strings.ToLower(strings.TrimSpace(owner.username))
 
 	code, body, _, err := ownerClient.PostJSON(ctx, "/social/places", map[string]any{
-		"name":                 "Map Rooftop Cafe",
+		"name":                 "Map Rooftop Cafe " + mapSearchToken,
 		"category":             "coffee_shop",
 		"description":          "rooftop and wifi",
 		"about":                "ótimo para amigos e encontros",
@@ -1523,7 +1525,7 @@ func runSocialMap(ctx context.Context, cfg Config, logger *slog.Logger) error {
 		return err
 	}
 
-	code, body, _, err = anonClient.Get(ctx, "/social/map/places/nearby?lat=-23.55052&lng=-46.633308&radius_m=2000&accessible=true&outdoor=true&highlight=rooftop&recommended_for=friends&category=coffee_shop", nil)
+	code, body, _, err = anonClient.Get(ctx, "/social/map/places/nearby?lat=-23.55052&lng=-46.633308&radius_m=2000&accessible=true&outdoor=true&highlight=rooftop&recommended_for=friends&category=coffee_shop&q="+url.QueryEscape(mapSearchToken), nil)
 	if err != nil {
 		return err
 	}
@@ -1569,7 +1571,7 @@ func runSocialMap(ctx context.Context, cfg Config, logger *slog.Logger) error {
 		return fmt.Errorf("expected highlights/recommended_for/hours in map payload, got body=%s", string(body))
 	}
 
-	code, body, _, err = anonClient.Get(ctx, "/social/map/places/viewport?north=-23.54&south=-23.56&east=-46.62&west=-46.65&category=coffee_shop&highlight=rooftop", nil)
+	code, body, _, err = anonClient.Get(ctx, "/social/map/places/viewport?north=-23.54&south=-23.56&east=-46.62&west=-46.65&category=coffee_shop&highlight=rooftop&q="+url.QueryEscape(mapSearchToken), nil)
 	if err != nil {
 		return err
 	}
