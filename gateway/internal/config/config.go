@@ -331,7 +331,7 @@ func defaults() Config {
 		BreakerFailures:        5,
 		BreakerReset:           30 * time.Second,
 		BreakerHalfOpen:        1,
-		CSP:                    "",
+		CSP:                    "default-src 'none'",
 		UpstreamRootCA:         "",
 		UpstreamClientCert:     "",
 		UpstreamClientKey:      "",

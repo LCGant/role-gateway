@@ -831,8 +831,8 @@ func runSocialFriends(ctx context.Context, cfg Config, logger *slog.Logger) erro
 }
 
 func runSocialPlaces(ctx context.Context, cfg Config, logger *slog.Logger) error {
-	if cfg.SocialMediaInternalToken == "" {
-		return errors.New("SMOKE_SOCIAL_MEDIA_INTERNAL_TOKEN not set")
+	if cfg.AuthMediaWorkerMintToken == "" {
+		return errors.New("SMOKE_AUTH_MEDIA_WORKER_MINT_TOKEN not set")
 	}
 
 	ownerClient, err := newClient(cfg)
@@ -969,12 +969,17 @@ func runSocialPlaces(ctx context.Context, cfg Config, logger *slog.Logger) error
 		return errors.New("asset id missing")
 	}
 
+	mediaToken, err := mintInternalServiceToken(ctx, cfg, "social", "social:media:write", "default", cfg.AuthMediaWorkerMintToken)
+	if err != nil {
+		return fmt.Errorf("mint media-worker token: %w", err)
+	}
+
 	mediaBase := strings.TrimRight(cfg.SocialBaseURL, "/") + "/media/" + assetResp.Asset.ID
 	code, body, _, err = socialInternal.PostJSON(ctx, "/internal/media-assets/"+assetResp.Asset.ID+"/status", map[string]any{
 		"status":        "ready",
 		"media_url":     mediaBase + "/place-cover.jpg",
 		"thumbnail_url": mediaBase + "/place-cover-thumb.jpg",
-	}, map[string]string{"X-Internal-Token": cfg.SocialMediaInternalToken})
+	}, map[string]string{"Authorization": "Bearer " + mediaToken})
 	if err != nil {
 		return err
 	}
@@ -1046,8 +1051,8 @@ func runSocialPlaces(ctx context.Context, cfg Config, logger *slog.Logger) error
 }
 
 func runSocialPlaceFeed(ctx context.Context, cfg Config, logger *slog.Logger) error {
-	if cfg.SocialMediaInternalToken == "" {
-		return errors.New("SMOKE_SOCIAL_MEDIA_INTERNAL_TOKEN not set")
+	if cfg.AuthMediaWorkerMintToken == "" {
+		return errors.New("SMOKE_AUTH_MEDIA_WORKER_MINT_TOKEN not set")
 	}
 
 	viewerClient, err := newClient(cfg)
@@ -1164,12 +1169,17 @@ func runSocialPlaceFeed(ctx context.Context, cfg Config, logger *slog.Logger) er
 		return errors.New("place feed scenario missing asset id")
 	}
 
+	feedMediaToken, err := mintInternalServiceToken(ctx, cfg, "social", "social:media:write", "default", cfg.AuthMediaWorkerMintToken)
+	if err != nil {
+		return fmt.Errorf("mint media-worker token (place feed): %w", err)
+	}
+
 	mediaBase := strings.TrimRight(cfg.SocialBaseURL, "/") + "/media/" + assetResp.Asset.ID
 	code, body, _, err = socialInternal.PostJSON(ctx, "/internal/media-assets/"+assetResp.Asset.ID+"/status", map[string]any{
 		"status":        "ready",
 		"media_url":     mediaBase + "/friends-feed-cover.jpg",
 		"thumbnail_url": mediaBase + "/friends-feed-cover-thumb.jpg",
-	}, map[string]string{"X-Internal-Token": cfg.SocialMediaInternalToken})
+	}, map[string]string{"Authorization": "Bearer " + feedMediaToken})
 	if err != nil {
 		return err
 	}

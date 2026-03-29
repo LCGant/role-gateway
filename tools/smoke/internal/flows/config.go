@@ -19,7 +19,7 @@ type Config struct {
 	AuthNotificationMintToken   string
 	AuthPDPSocialAuthzMintToken string
 	AuthEmailVerificationToken  string
-	SocialMediaInternalToken    string
+	AuthMediaWorkerMintToken    string
 	NotificationOutboxDir       string
 	PDPInternalToken            string
 	AdminToken                  string
@@ -63,7 +63,7 @@ func LoadConfig() Config {
 		AuthNotificationMintToken:   strings.TrimSpace(os.Getenv("SMOKE_AUTH_NOTIFICATION_AUTH_MINT_TOKEN")),
 		AuthPDPSocialAuthzMintToken: strings.TrimSpace(os.Getenv("SMOKE_AUTH_PDP_SOCIAL_AUTHZ_MINT_TOKEN")),
 		AuthEmailVerificationToken:  authEmailVerificationToken,
-		SocialMediaInternalToken:    strings.TrimSpace(os.Getenv("SMOKE_SOCIAL_MEDIA_INTERNAL_TOKEN")),
+		AuthMediaWorkerMintToken:    strings.TrimSpace(os.Getenv("SMOKE_AUTH_MEDIA_WORKER_MINT_TOKEN")),
 		NotificationOutboxDir:       strings.TrimSpace(os.Getenv("SMOKE_NOTIFICATION_OUTBOX_DIR")),
 		PDPInternalToken:            strings.TrimSpace(os.Getenv("SMOKE_PDP_INTERNAL_TOKEN")),
 		AdminToken:                  strings.TrimSpace(os.Getenv("SMOKE_ADMIN_TOKEN")),
