@@ -1347,52 +1347,7 @@ func runSocialPlaceFeed(ctx context.Context, cfg Config, logger *slog.Logger) er
 		return fmt.Errorf("unexpected like metrics payload: %s", string(body))
 	}
 
-	code, body, _, err = viewerClient.PostJSON(ctx, "/social/places/"+placeResp.Place.ID+"/dislike", map[string]any{}, nil)
-	if err != nil {
-		return err
-	}
-	if err := assert.Status(code, http.StatusOK, body); err != nil {
-		return err
-	}
-	if err := json.Unmarshal(body, &metricsResp); err != nil {
-		return err
-	}
-	if metricsResp.Metrics.LikesCount != 0 || metricsResp.Metrics.DislikesCount != 1 || metricsResp.Metrics.ViewerLiked || !metricsResp.Metrics.ViewerDisliked {
-		return fmt.Errorf("unexpected dislike metrics payload: %s", string(body))
-	}
-
-	code, body, _, err = viewerClient.Do(ctx, http.MethodDelete, "/social/places/"+placeResp.Place.ID+"/dislike", nil, nil)
-	if err != nil {
-		return err
-	}
-	if err := assert.Status(code, http.StatusOK, body); err != nil {
-		return err
-	}
-
-	code, body, _, err = viewerClient.Get(ctx, "/social/places/"+placeResp.Place.ID, nil)
-	if err != nil {
-		return err
-	}
-	if err := assert.Status(code, http.StatusOK, body); err != nil {
-		return err
-	}
-	var placeDetail struct {
-		Place struct {
-			ID      string `json:"id"`
-			Metrics struct {
-				LikesCount     int  `json:"likes_count"`
-				DislikesCount  int  `json:"dislikes_count"`
-				ViewerLiked    bool `json:"viewer_liked"`
-				ViewerDisliked bool `json:"viewer_disliked"`
-			} `json:"metrics"`
-		} `json:"place"`
-	}
-	if err := json.Unmarshal(body, &placeDetail); err != nil {
-		return err
-	}
-	if placeDetail.Place.ID != placeResp.Place.ID || placeDetail.Place.Metrics.LikesCount != 0 || placeDetail.Place.Metrics.DislikesCount != 0 || placeDetail.Place.Metrics.ViewerLiked || placeDetail.Place.Metrics.ViewerDisliked {
-		return fmt.Errorf("unexpected place metrics after undislike: %s", string(body))
-	}
+	// Dislike endpoints removed — system uses implicit negative signals (impression without click).
 
 	code, body, _, err = anonClient.Get(ctx, "/social/places/"+placeResp.Place.ID+"/reviews", nil)
 	if err != nil {
