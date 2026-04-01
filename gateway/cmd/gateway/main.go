@@ -37,6 +37,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	// No CORS middleware: API is same-origin or uses explicit proxy.
+	// Add CORS with explicit origins if cross-origin browser access is needed.
 	mws := []func(http.Handler) http.Handler{
 		httpx.RequestID,
 		httpx.Recover,

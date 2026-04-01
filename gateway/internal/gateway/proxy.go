@@ -2,11 +2,13 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -141,10 +143,21 @@ func newProxy(name, prefix string, target *url.URL, transport *http.Transport, l
 		default:
 			httpx.WriteBadGateway(rw)
 		}
+		errClass := "upstream_unknown"
+		if errors.Is(err, context.DeadlineExceeded) {
+			errClass = "upstream_timeout"
+		} else if errors.Is(err, context.Canceled) {
+			errClass = "upstream_canceled"
+		} else {
+			var opErr *net.OpError
+			if errors.As(err, &opErr) {
+				errClass = "upstream_connect_" + opErr.Op
+			}
+		}
 		logger.Warn("upstream_error",
 			slog.String("request_id", httpx.EnsureRequestID(req)),
 			slog.String("upstream", name),
-			slog.String("error", err.Error()),
+			slog.String("error_class", errClass),
 		)
 	}
 

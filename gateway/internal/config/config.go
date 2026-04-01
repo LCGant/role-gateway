@@ -327,7 +327,7 @@ func defaults() Config {
 		TrustedCIDRs:           nil,
 		AllowedHosts:           []string{"localhost", "127.0.0.1"},
 		LogDevEnabled:          false,
-		BreakerEnabled:         false,
+		BreakerEnabled:         true,
 		BreakerFailures:        5,
 		BreakerReset:           30 * time.Second,
 		BreakerHalfOpen:        1,

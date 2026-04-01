@@ -17,7 +17,7 @@ func RecoverWithHook(hook func(any, []byte, *http.Request)) func(http.Handler) h
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
-					slog.Error("panic", "err", rec, "stack", string(debug.Stack()))
+					slog.Error("panic_recovered", "request_id", r.Header.Get("X-Request-Id"))
 					if hook != nil {
 						hook(rec, debug.Stack(), r)
 					}

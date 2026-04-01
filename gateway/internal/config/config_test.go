@@ -52,7 +52,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ReadHeaderTimeout != 5*time.Second || cfg.ReadTimeout != 15*time.Second || cfg.WriteTimeout != 15*time.Second || cfg.IdleTimeout != 60*time.Second {
 		t.Fatalf("timeout defaults wrong: %+v", cfg)
 	}
-	if cfg.BreakerEnabled || cfg.BreakerFailures != 5 || cfg.BreakerHalfOpen != 1 || cfg.BreakerReset != 30*time.Second || cfg.CSP != "default-src 'none'" {
+	if !cfg.BreakerEnabled || cfg.BreakerFailures != 5 || cfg.BreakerHalfOpen != 1 || cfg.BreakerReset != 30*time.Second || cfg.CSP != "default-src 'none'" {
 		t.Fatalf("breaker defaults wrong: %+v", cfg)
 	}
 	if len(cfg.AllowedHosts) != 2 || cfg.HSTSMaxAge != 31536000 || !cfg.HSTSIncludeSubdomains {
