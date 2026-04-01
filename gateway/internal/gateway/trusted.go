@@ -10,6 +10,13 @@ import (
 	"github.com/LCGant/role-gateway/libs/common/httpx"
 )
 
+// TODO(quality): trustedNets, allowedHosts and hostRulesBad are package-level
+// mutable state protected by trustedMu. Ideally these would live as fields on
+// the Handler struct, but moving them there requires threading Handler through
+// every helper (clientIP, hostAllowed, isTrustedIP, parseTrustedCIDRs, etc.)
+// and through the proxy Rewrite closure in proxy.go. That touches 5+ files and
+// every test. The mutex keeps concurrent access safe; revisit if Handler is
+// ever refactored to a proper dependency-injection style.
 var (
 	trustedMu    sync.RWMutex
 	trustedNets  []*net.IPNet
